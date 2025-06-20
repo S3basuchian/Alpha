@@ -81,6 +81,13 @@ public class IndexedInstanceStorage {
 		recentlyAddedInstances.clear();
 	}
 
+
+	/**
+	 * Initializes the given index position by iterating over all instances known in the storage and creating the
+	 * corresponding hashmaps
+	 *
+	 * @param position
+	 */
 	public void addIndexPosition(int position) {
 		if (position < 0 || position > predicate.getArity() - 1) {
 			throw new RuntimeException("Requested to create indices for attribute out of range." +
@@ -115,6 +122,16 @@ public class IndexedInstanceStorage {
 		return instances.contains(instance);
 	}
 
+	/**
+	 * Adds the provided instance to the list of instances in this storage. Furthermore, iterates over all indices
+	 * known to the storage and adds the instance to each index's map.
+	 * <p>
+	 * Todo: If an index currently does not contain a map, this method will skip it entirely. Maybe instead, this should
+	 * 	generate a new entry instead? Although I'm not sure if this can even happen, since addIndexPosition is called
+	 * 	during the initialization of the WorkingMemory
+	 *
+	 * @param instance
+	 */
 	public void addInstance(Instance instance) {
 		if (instance.terms.size() != predicate.getArity()) {
 			throw new RuntimeException("Instance length does not match arity of IndexedInstanceStorage: " +
@@ -179,6 +196,17 @@ public class IndexedInstanceStorage {
 		return matchingInstances == null ? Collections.emptyList() : matchingInstances;
 	}
 
+	/**
+	 * Searches the IndexInstanceStorage for the matching term + index combination of the provided atom that has the
+	 * least number of matches in the storage. E.g., atom a(X,1,p): If there is no other atom a with "1" as second
+	 * argument, then we would return 1 (index of term "1").
+	 * <p>
+	 * Todo: Maybe this method should check first, whether the parameter of the searched atom even matches the one of
+	 * 	this storage? Otherwise the result of this method is probably useless
+	 *
+	 * @param atom
+	 * @return
+	 */
 	private int getMostSelectiveGroundTermPosition(Atom atom) {
 		int smallestNumberOfInstances = Integer.MAX_VALUE;
 		int mostSelectiveTermPosition = -1;
@@ -200,6 +228,14 @@ public class IndexedInstanceStorage {
 		return mostSelectiveTermPosition;
 	}
 
+	/**
+	 * Searches the IndexInstanceStorage for instances matching at least one ground term position with the substitute
+	 * atom and returns the smallest list that has at least one matching ground term. If there is no matching ground
+	 * term in the storage return all instances
+	 *
+	 * @param substitute
+	 * @return
+	 */
 	public List<Instance> getInstancesFromPartiallyGroundAtom(Atom substitute) {
 		// For selection of the instances, find ground term on which to select.
 		int firstGroundTermPosition = getMostSelectiveGroundTermPosition(substitute);
