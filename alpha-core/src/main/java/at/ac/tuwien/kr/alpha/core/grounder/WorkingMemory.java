@@ -39,14 +39,34 @@ import at.ac.tuwien.kr.alpha.api.programs.atoms.Atom;
 import at.ac.tuwien.kr.alpha.api.programs.literals.Literal;
 import at.ac.tuwien.kr.alpha.commons.substitutions.Instance;
 
+/**
+ * WorkingMemory keeping track of all ground instances assigned by a grounder
+ */
 public class WorkingMemory {
+
+	/**
+	 * The actual workingMemory containing a pair of instance storages (positive and negative) for each predicate
+	 */
 	protected HashMap<Predicate, ImmutablePair<IndexedInstanceStorage, IndexedInstanceStorage>> workingMemory = new HashMap<>();
+
+
+	/**
+	 * List of modified (i.e., newly added) instances recorded in the WorkingMemory since the last reset()
+	 */
 	private HashSet<IndexedInstanceStorage> modifiedWorkingMemories = new LinkedHashSet<>();
 
 	public boolean contains(Predicate predicate) {
 		return workingMemory.containsKey(predicate);
 	}
 
+	/**
+	 * Initializes the workingMemory for one predicate and creates the IndexedInstanceStorage for the positive and
+	 * negative representations.
+	 * Also initializes all index positions of the predicate. However, since the instances' list of the storage will
+	 * still be empty at this point, the instances must still be added via addInstance
+	 *
+	 * @param predicate
+	 */
 	public void initialize(Predicate predicate) {
 		if (workingMemory.containsKey(predicate)) {
 			return;
@@ -80,6 +100,14 @@ public class WorkingMemory {
 		}
 	}
 
+	/**
+	 * Adds a record of the instantiated atom to the WorkingMemory.
+	 * * Called in the main loop of the NaiveGrounder each time the WritableAssignment changes
+	 * * Furthermore, called if the StratifiedEvaluation fires a rule for the head atom of the rule
+	 *
+	 * @param atom
+	 * @param value
+	 */
 	public void addInstance(Atom atom, boolean value) {
 		addInstance(atom.getPredicate(), value, new Instance(atom.getTerms()));
 	}
@@ -93,6 +121,16 @@ public class WorkingMemory {
 		}
 	}
 
+	/**
+	 * Adds a record of the instantiated atom to the WorkingMemory.
+	 * * Called in NaiveGrounder during the bootstrap process
+	 * * Also used in StratifiedEvaluation (which uses a separately instantiated WorkingMemory for some reason) during
+	 * the creation of the InternalProgram
+	 *
+	 * @param predicate
+	 * @param value
+	 * @param instances
+	 */
 	public void addInstances(Predicate predicate, boolean value, Iterable<Instance> instances) {
 		IndexedInstanceStorage storage = get(predicate, value);
 
@@ -108,6 +146,12 @@ public class WorkingMemory {
 		modifiedWorkingMemories = new LinkedHashSet<>();
 	}
 
+	/**
+	 * Used in various places by the NaiveGrounder and StratifiedEvaluation to get a list of recently added/modified
+	 * instances. Usually reset() is called after the list is processed
+	 *
+	 * @return
+	 */
 	public Set<IndexedInstanceStorage> modified() {
 		return modifiedWorkingMemories;
 	}
