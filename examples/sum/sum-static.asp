@@ -1,0 +1,1 @@
+sum(S) :- S = #sum{ V : value(V) }.

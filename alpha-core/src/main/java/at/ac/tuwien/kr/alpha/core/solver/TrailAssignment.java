@@ -58,6 +58,11 @@ import static at.ac.tuwien.kr.alpha.core.solver.ThriceTruth.TRUE;
  */
 public class TrailAssignment implements WritableAssignment, Checkable {
 	private static final Logger LOGGER = LoggerFactory.getLogger(TrailAssignment.class);
+
+	/**
+	 * Every conclusion requires an antecedent in Alpha. If there is no logical conclusion (i.e., during the final
+	 * assignments), we use this closing indicator instead
+	 */
 	static final Antecedent CLOSING_INDICATOR_ANTECEDENT = new Antecedent() {
 		int[] literals = new int[0];
 
@@ -83,17 +88,33 @@ public class TrailAssignment implements WritableAssignment, Checkable {
 	private final AtomStore atomStore;
 	private ChoiceManager choiceManagerCallback;
 
+	// ALL the following arrays include information about all atoms, referenced by their id
+
 	/**
 	 * Contains for each known atom a value whose two least
 	 * significant bits encode the atom's truth value
 	 * (cf. {@link TrailAssignment#translateTruth(int)}
-	 * and whose remaining bits encode the atom's weak decision level. 
+	 * and whose remaining bits encode the atom's weak decision level (i.e., the level which the atom was first
+	 * assigned (FALSE, MBT or TRUE)).
 	 */
 	private int[] values;
 
+	/**
+	 * The decision level at which an atom was assigned TRUE (not MBT).
+	 */
 	private int[] strongDecisionLevels;
 	private Antecedent[] impliedBy;
+
+	/**
+	 * Holds information about whether a changing atom should invoke choiceManagerCallback
+	 */
 	private boolean[] callbackUponChange;
+
+
+	/**
+	 * A list containing (out of order) information about each assigned atom, its value, the decision level and the
+	 * antecedent
+	 */
 	private ArrayList<OutOfOrderLiteral> outOfOrderLiterals = new ArrayList<>();
 	private int highestDecisionLevelContainingOutOfOrderLiterals;
 	private int[] trail = new int[0];
@@ -107,6 +128,13 @@ public class TrailAssignment implements WritableAssignment, Checkable {
 	private boolean checksEnabled;
 	long replayCounter;
 
+
+	/**
+	 * Constructor for a new TrailsAssignment as used by the solver
+	 *
+	 * @param atomStore
+	 * @param checksEnabled
+	 */
 	public TrailAssignment(AtomStore atomStore, boolean checksEnabled) {
 		this.checksEnabled = checksEnabled;
 		this.atomStore = atomStore;
@@ -123,6 +151,9 @@ public class TrailAssignment implements WritableAssignment, Checkable {
 		this(atomStore, false);
 	}
 
+	/**
+	 * Resets the entire TrailAssignment
+	 */
 	@Override
 	public void clear() {
 		mbtCount = 0;
@@ -155,6 +186,9 @@ public class TrailAssignment implements WritableAssignment, Checkable {
 		return values[atom] != 0;
 	}
 
+	/**
+	 * @return the first BasicAtom assigned MBT in the atomStore
+	 */
 	@Override
 	public int getBasicAtomAssignedMBT() {
 		for (int atom = 1; atom <= atomStore.getMaxAtomId(); atom++) {
@@ -170,12 +204,27 @@ public class TrailAssignment implements WritableAssignment, Checkable {
 		return new TrailPollable();
 	}
 
+	/**
+	 * Searches for the lowest weak decision level of an atom
+	 * <p>
+	 * TODO: I think this is the same as {@link TrailAssignment#getOutOfOrderDecisionLevel(int atom)} except of the
+	 * 	return value being different if an atom is unassigned. Seems unnecessary to have both though.
+	 * 	ALTHOUGH: This method also considers atoms that are not in the list of out-of-order literals. Maybe that is
+	 * 	crucial
+	 *
+	 * @param atom the atom.
+	 * @return the first/lowest/real weak decision level of the atom or -1 if the atom is unassigned
+	 */
 	@Override
 	public int getRealWeakDecisionLevel(int atom) {
+		// check if there has been something assigned yet
 		if (getTruth(atom) == null) {
 			return -1;
 		}
+		// get the current weak decision level
 		int lowestDecisionLevelForAtom = getWeakDecisionLevel(atom);
+
+		// search all outOfOrderLiterals for the same atom and check if there is a lower decision level
 		for (OutOfOrderLiteral outOfOrderLiteral : outOfOrderLiterals) {
 			if (outOfOrderLiteral.atom == atom && outOfOrderLiteral.decisionLevel < lowestDecisionLevelForAtom) {
 				lowestDecisionLevelForAtom = outOfOrderLiteral.decisionLevel;
@@ -187,7 +236,8 @@ public class TrailAssignment implements WritableAssignment, Checkable {
 	/**
 	 * Searches out-of-order literals for the lowest decision level the atom is assigned in.
 	 * @param atom the atom to check.
-	 * @return Integer.MAX_VALUE if the atom is not assigned out-of-order, otherwise the lowest decision level it is assigned.
+	 * @return Integer.MAX_VALUE if the atom is not assigned out-of-order, otherwise the lowest decision level it is
+	 * 	assigned.
 	 */
 	public int getOutOfOrderDecisionLevel(int atom) {
 		int lowestDecisionLevel = Integer.MAX_VALUE;
@@ -199,6 +249,13 @@ public class TrailAssignment implements WritableAssignment, Checkable {
 		return lowestDecisionLevel;
 	}
 
+	/**
+	 * Same as {@link TrailAssignment#getOutOfOrderDecisionLevel(int atom)} but for strong decision level
+	 *
+	 * @param atom
+	 * @return Integer.MAX_VALUE if the atom is not assigned out-of-order, otherwise the lowest strong decision level
+	 * 	it is assigned.
+	 */
 	int getOutOfOrderStrongDecisionLevel(int atom) {
 		int lowestDecisionLevel = Integer.MAX_VALUE;
 		for (OutOfOrderLiteral outOfOrderLiteral : outOfOrderLiterals) {
@@ -209,6 +266,11 @@ public class TrailAssignment implements WritableAssignment, Checkable {
 		return lowestDecisionLevel;
 	}
 
+	/**
+	 * Informs the callback of an atom (if registered). Seems to be called when the atom assignment is changed
+	 *
+	 * @param atom
+	 */
 	private void informCallback(int atom) {
 		if (callbackUponChange[atom]) {
 			choiceManagerCallback.callbackOnChanged(atom);

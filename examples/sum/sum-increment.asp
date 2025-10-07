@@ -1,0 +1,1 @@
+sum(S) :- S = S1 + S2, last_sum(S1), value(S2).
