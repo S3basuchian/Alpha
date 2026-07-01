@@ -95,7 +95,7 @@ public class ChoiceManager implements Checkable {
 		for (Choice e : choiceStack) {
 			enumerationLiterals[enumerationPos++] = atomToLiteral(e.getAtom(), e.getTruthValue());
 		}
-		return new NoGood(enumerationLiterals);
+		return NoGood.enumeration(enumerationLiterals);
 	}
 
 	@Override
@@ -212,6 +212,19 @@ public class ChoiceManager implements Checkable {
 
 	public void growForMaxAtomId(int maxAtomId) {
 		choicePointInfluenceManager.growForMaxAtomId(maxAtomId);
+	}
+
+	/**
+	 * Reset for a fresh solving shot after the assignment was cleared: drop the choice stack and stats and
+	 * re-register the choice-point change callbacks wiped by {@link WritableAssignment#clear()}.
+	 */
+	public void reset() {
+		choiceStack.clear();
+		choices = 0;
+		backtracks = 0;
+		backtracksWithinBackjumps = 0;
+		backjumps = 0;
+		choicePointInfluenceManager.resetForNewShot();
 	}
 
 	private void addHeadsToBodies(Map<Integer, Set<Integer>> headsToBodies) {

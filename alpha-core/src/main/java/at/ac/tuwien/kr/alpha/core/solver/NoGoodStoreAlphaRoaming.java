@@ -38,9 +38,15 @@ import at.ac.tuwien.kr.alpha.core.common.NoGoodInterface.Type;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.BiPredicate;
 
 import static at.ac.tuwien.kr.alpha.commons.util.Util.arrayGrowthSize;
 import static at.ac.tuwien.kr.alpha.commons.util.Util.oops;
@@ -50,6 +56,7 @@ import static at.ac.tuwien.kr.alpha.core.programs.atoms.Literals.atomToLiteral;
 import static at.ac.tuwien.kr.alpha.core.programs.atoms.Literals.isNegated;
 import static at.ac.tuwien.kr.alpha.core.programs.atoms.Literals.isPositive;
 import static at.ac.tuwien.kr.alpha.core.programs.atoms.Literals.literalToString;
+import static at.ac.tuwien.kr.alpha.core.programs.atoms.Literals.negateLiteral;
 import static at.ac.tuwien.kr.alpha.core.solver.ThriceTruth.FALSE;
 import static at.ac.tuwien.kr.alpha.core.solver.ThriceTruth.MBT;
 import static at.ac.tuwien.kr.alpha.core.solver.ThriceTruth.TRUE;
@@ -86,6 +93,39 @@ public class NoGoodStoreAlphaRoaming implements NoGoodStore, BinaryNoGoodPropaga
 	private boolean hasBinaryNoGoods;
 
 	private final NoGoodCounter counter = new NoGoodCounter();
+
+	/**
+	 * Enumeration nogoods that ended up watched (size &gt;= 3). Tracked so {@link #purgeEnumerationNoGoods()}
+	 * can drop them from the ordinary watch lists between shots without disturbing structural / learned
+	 * nogoods.
+	 */
+	private final ArrayList<WatchedNoGood> enumerationWatchedNoGoods = new ArrayList<>();
+
+	/**
+	 * Enumeration nogoods of size 2. The original {@link NoGood} is kept so the two binary-watch buckets
+	 * (one per literal) can be located and the "other literal" entry stripped.
+	 */
+	private final ArrayList<NoGood> enumerationBinaryNoGoods = new ArrayList<>();
+
+	/**
+	 * Unary enumeration nogoods. Each one forced its sole atom at decision level 0 via {@link #addUnary};
+	 * {@link #purgeEnumerationNoGoods()} undoes those assignments and decrements the counter.
+	 */
+	private final ArrayList<NoGood> enumerationUnaryNoGoods = new ArrayList<>();
+
+	/**
+	 * Learned nogoods of size 2. Conflict-driven learning can produce binary clauses; {@link
+	 * LearnedNoGoodDeletion} only tracks multi-ary learned ones, so we maintain a parallel list here
+	 * for {@link #dropAllLearnedNoGoods()} (used by the in-place retraction path).
+	 */
+	private final ArrayList<NoGood> learnedBinaryNoGoods = new ArrayList<>();
+
+	/**
+	 * Learned nogoods of size 1. These force their sole atom at decision level 0; the in-place
+	 * retraction path clears the whole assignment before dropping them, so only their watch/counter
+	 * bookkeeping has to be undone here.
+	 */
+	private final ArrayList<NoGood> learnedUnaryNoGoods = new ArrayList<>();
 
 	public NoGoodStoreAlphaRoaming(WritableAssignment assignment, boolean checksEnabled) {
 		this.assignment = assignment;
@@ -162,6 +202,128 @@ public class NoGoodStoreAlphaRoaming implements NoGoodStore, BinaryNoGoodPropaga
 		}
 	}
 
+	/**
+	 * Drop every learned nogood from the store. Used by the in-place retraction path: a learned nogood
+	 * whose derivation depended on a now-retracted fact may be unsound in the reduced program, so all
+	 * learning is discarded (the sound, conservative choice — no provenance tracking needed).
+	 *
+	 * <p>The caller ({@link DefaultSolver#retractInPlace}) has already cleared the whole assignment, so
+	 * the learned unaries' dl-0 propagations are gone; here we only detach watches and reset counters.
+	 */
+	@Override
+	public void dropAllLearnedNoGoods() {
+		// Multi-ary learned: tracked by LearnedNoGoodDeletion — detach from the watch lists and reset.
+		for (WatchedNoGood wng : new ArrayList<>(learnedNoGoodDeletion.inspectLearnedNoGoods())) {
+			removeFromWatches(wng);
+		}
+		learnedNoGoodDeletion.reset();
+		// Binary learned: strip entries from both binary watch lists and decrement the counter.
+		for (NoGood binary : learnedBinaryNoGoods) {
+			int lit0 = binary.getLiteral(0);
+			int lit1 = binary.getLiteral(1);
+			binaryWatches[lit0].removeOrdinaryNoGood(lit1);
+			binaryWatches[lit1].removeOrdinaryNoGood(lit0);
+			counter.remove(binary);
+		}
+		learnedBinaryNoGoods.clear();
+		// Unary learned: they hold no watches (addUnary only assigns); the assignment clear already undid
+		// their dl-0 propagation, so just drop the tracking and counter.
+		for (NoGood unary : learnedUnaryNoGoods) {
+			counter.remove(unary);
+		}
+		learnedUnaryNoGoods.clear();
+	}
+
+	/**
+	 * Re-assert the given unit (size-1) nogoods at decision level 0. Used by the in-place retraction path
+	 * after {@link WritableAssignment#clear()} to re-force the surviving facts, which re-triggers
+	 * propagation of their structural consequences.
+	 */
+	@Override
+	public void reassertUnits(Collection<NoGood> units) {
+		for (NoGood unit : units) {
+			addUnary(unit);
+		}
+	}
+
+	@Override
+	public void purgeEnumerationNoGoods() {
+		// Snapshot multi-ary enum nogoods before we drop them, so the cascade can recognise them as
+		// removed antecedents on the dl-0 trail.
+		List<WatchedNoGood> enumMultiAry = new ArrayList<>(enumerationWatchedNoGoods);
+		for (WatchedNoGood wng : enumMultiAry) {
+			removeFromWatches(wng);
+		}
+		enumerationWatchedNoGoods.clear();
+
+		Map<Integer, Set<Integer>> binaryOthers = collectBinaryOtherAtomsByForLiteral(enumerationBinaryNoGoods);
+		for (NoGood binary : enumerationBinaryNoGoods) {
+			int lit0 = binary.getLiteral(0);
+			int lit1 = binary.getLiteral(1);
+			binaryWatches[lit0].removeOrdinaryNoGood(lit1);
+			binaryWatches[lit1].removeOrdinaryNoGood(lit0);
+			counter.remove(binary);
+		}
+		enumerationBinaryNoGoods.clear();
+
+		// Transitive un-assign: each unary enum nogood forced its atom at dl 0, which may have cascaded
+		// through structural support nogoods to other dl-0 assignments. Un-assigning the seed atoms
+		// alone would leave those cascaded atoms pinned by now-invalid antecedents — blocking valid
+		// answer sets in the next shot. The antecedent-removed predicate additionally catches atoms
+		// propagated at dl 0 directly by binary/multi-ary enum nogoods that aren't reachable from the
+		// unary-seeded chains (e.g. when the propagation's reason atoms are all structural facts).
+		ArrayList<Integer> forcedAtoms = new ArrayList<>(enumerationUnaryNoGoods.size());
+		for (NoGood unary : enumerationUnaryNoGoods) {
+			forcedAtoms.add(atomOf(unary.getLiteral(0)));
+			counter.remove(unary);
+		}
+		assignment.unassignAtDecisionLevelZeroWithDependents(forcedAtoms,
+				antecedentRemovedPredicate(enumMultiAry, binaryOthers));
+		enumerationUnaryNoGoods.clear();
+	}
+
+	/**
+	 * Index a list of binary nogoods by the literal a {@link BinaryWatchList} would key on, mapping it
+	 * to the set of "other-side" atoms whose dl-0 propagation through that watch list came from one of
+	 * the listed nogoods. Used by {@link #antecedentRemovedPredicate} to recognise binary-propagated
+	 * dl-0 atoms during cascade seeding.
+	 */
+	private static Map<Integer, Set<Integer>> collectBinaryOtherAtomsByForLiteral(List<NoGood> binaries) {
+		if (binaries.isEmpty()) {
+			return null;
+		}
+		Map<Integer, Set<Integer>> result = new HashMap<>();
+		for (NoGood binary : binaries) {
+			int lit0 = binary.getLiteral(0);
+			int lit1 = binary.getLiteral(1);
+			// Either literal could be the BinaryWatchList's forLiteral; record both directions.
+			result.computeIfAbsent(lit0, k -> new HashSet<>()).add(atomOf(lit1));
+			result.computeIfAbsent(lit1, k -> new HashSet<>()).add(atomOf(lit0));
+		}
+		return result;
+	}
+
+	private BiPredicate<Integer, Antecedent> antecedentRemovedPredicate(
+			List<WatchedNoGood> removedMultiAry, Map<Integer, Set<Integer>> binaryOthersByForLiteral) {
+		if (removedMultiAry.isEmpty() && binaryOthersByForLiteral == null) {
+			return (atom, ant) -> false;
+		}
+		IdentityHashMap<Antecedent, Boolean> removedSet = new IdentityHashMap<>(removedMultiAry.size() * 2);
+		for (WatchedNoGood wng : removedMultiAry) {
+			removedSet.put(wng, Boolean.TRUE);
+		}
+		return (atom, ant) -> {
+			if (removedSet.containsKey(ant)) {
+				return true;
+			}
+			if (binaryOthersByForLiteral != null && ant instanceof BinaryWatchList) {
+				Set<Integer> others = binaryOthersByForLiteral.get(((BinaryWatchList) ant).forLiteral);
+				return others != null && others.contains(atom);
+			}
+			return false;
+		};
+	}
+
 	void removeFromWatches(WatchedNoGood toRemove) {
 		counter.remove(toRemove);
 		int watchedLiteral1 = toRemove.getLiteral(0);
@@ -197,13 +359,35 @@ public class NoGoodStoreAlphaRoaming implements NoGoodStore, BinaryNoGoodPropaga
 	public ConflictCause add(int id, NoGood noGood, int lbd) {
 		LOGGER.trace("Adding {}", noGood);
 
+		final boolean isEnumeration = noGood.getType() == Type.ENUMERATION;
+		final boolean isLearnt = noGood.getType() == Type.LEARNT;
 		final ConflictCause conflictCause;
 		if (noGood.isUnary()) {
 			conflictCause = addUnary(noGood);
+			if (conflictCause == null) {
+				// addUnary directly assigns the complement of the literal at the current decision level.
+				// Enumeration unaries leave a dl-0 propagation behind that purgeEnumerationNoGoods un-does;
+				// learned unaries are tracked so dropAllLearnedNoGoods can drop them on retraction.
+				if (isEnumeration) {
+					enumerationUnaryNoGoods.add(noGood);
+				} else if (isLearnt) {
+					learnedUnaryNoGoods.add(noGood);
+				}
+			}
 		} else if (noGood.isBinary()) {
 			conflictCause = addAndWatchBinary(noGood);
+			if (conflictCause == null) {
+				if (isEnumeration) {
+					enumerationBinaryNoGoods.add(noGood);
+				} else if (isLearnt) {
+					learnedBinaryNoGoods.add(noGood);
+				}
+			}
 		} else {
 			conflictCause = addAndWatch(noGood, lbd);
+			// Multi-ary tracking happens inside addAndWatch via recordIfEnumeration on the WatchedNoGood,
+			// because that method constructs the WatchedNoGood we need to keep a reference to.
+			// Multi-ary learned: tracked separately via LearnedNoGoodDeletion.recordLearnedNoGood.
 		}
 
 		if (conflictCause == null) {
@@ -381,6 +565,11 @@ public class NoGoodStoreAlphaRoaming implements NoGoodStore, BinaryNoGoodPropaga
 		if (noGood.getType() == Type.LEARNT) {
 			wng.setLBD(lbd);
 			learnedNoGoodDeletion.recordLearnedNoGood(wng);
+		}
+
+		// Record for between-shot removal if this NoGood blocks an already-found answer set.
+		if (noGood.getType() == Type.ENUMERATION) {
+			enumerationWatchedNoGoods.add(wng);
 		}
 
 		if (wng.getAlphaPointer() == -1 && noGood.hasHead()) {
@@ -680,6 +869,10 @@ public class NoGoodStoreAlphaRoaming implements NoGoodStore, BinaryNoGoodPropaga
 		private int[] noGoodsWithHead = new int[10];
 		private int noGoodsWithHeadSize;
 		private final int forLiteral;
+		// Other-side literals of headless binary enumeration nogoods on this watch list, so an instantiated
+		// BinaryAntecedent can report whether it stems from an enumeration nogood (needed by conflict analysis
+		// to detect enumeration-derived learned nogoods). Enumeration (and learned) nogoods are always headless.
+		private final Set<Integer> enumerationOtherLiterals = new HashSet<>();
 
 		private BinaryWatchList(int forLiteral) {
 			this.forLiteral = forLiteral;
@@ -722,12 +915,28 @@ public class NoGoodStoreAlphaRoaming implements NoGoodStore, BinaryNoGoodPropaga
 			return null;
 		}
 
+		boolean removeOrdinaryNoGood(int otherLiteral) {
+			for (int i = 0; i < noGoodsWithoutHeadSize; i++) {
+				if (noGoodsWithoutHead[i] == otherLiteral) {
+					System.arraycopy(noGoodsWithoutHead, i + 1, noGoodsWithoutHead, i, noGoodsWithoutHeadSize - i - 1);
+					noGoodsWithoutHeadSize--;
+					noGoodsWithoutHead[noGoodsWithoutHeadSize] = 0;
+					enumerationOtherLiterals.remove(otherLiteral);
+					return true;
+				}
+			}
+			return false;
+		}
+
 		private ConflictCause addOrdinaryNoGood(NoGood noGood) {
 			if (noGoodsWithoutHeadSize + 1 > noGoodsWithoutHead.length) {
 				noGoodsWithoutHead = Arrays.copyOf(noGoodsWithoutHead, arrayGrowthSize(noGoodsWithoutHeadSize));
 			}
 			int otherLiteral = noGood.getLiteral(0) == forLiteral ? noGood.getLiteral(1) : noGood.getLiteral(0);
 			noGoodsWithoutHead[noGoodsWithoutHeadSize++] = otherLiteral;
+			if (noGood.getType() == Type.ENUMERATION) {
+				enumerationOtherLiterals.add(otherLiteral);
+			}
 			// Assign otherLiteral if the newly added NoGood is unit.
 			ThriceTruth literalTruth = assignment.getTruth(atomOf(forLiteral));
 			if (literalTruth != null && literalTruth.toBoolean() == isPositive(forLiteral)) {
@@ -779,15 +988,21 @@ public class NoGoodStoreAlphaRoaming implements NoGoodStore, BinaryNoGoodPropaga
 
 		@Override
 		public Antecedent instantiateAntecedent(int impliedLiteral) {
-			return new BinaryAntecedent(impliedLiteral, forLiteral);
+			// Propagation passes the stored other-literal; a conflict passes its negation. Check both so the
+			// flag is correct in either case (worst case an over-approximation, which stays sound).
+			boolean fromEnumeration = enumerationOtherLiterals.contains(impliedLiteral)
+					|| enumerationOtherLiterals.contains(negateLiteral(impliedLiteral));
+			return new BinaryAntecedent(impliedLiteral, forLiteral, fromEnumeration);
 		}
 
 		private class BinaryAntecedent implements Antecedent {
 			private final int[] literals = new int[2];
+			private final boolean fromEnumeration;
 
-			BinaryAntecedent(int lit1, int lit2) {
+			BinaryAntecedent(int lit1, int lit2, boolean fromEnumeration) {
 				literals[0] = lit1;
 				literals[1] = lit2;
+				this.fromEnumeration = fromEnumeration;
 			}
 
 			@Override
@@ -801,6 +1016,11 @@ public class NoGoodStoreAlphaRoaming implements NoGoodStore, BinaryNoGoodPropaga
 
 			@Override
 			public void decreaseActivity() {
+			}
+
+			@Override
+			public boolean fromEnumeration() {
+				return fromEnumeration;
 			}
 
 			@Override

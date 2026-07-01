@@ -79,6 +79,21 @@ public class AtomStoreImpl implements AtomStore {
 		return predicateInstancesToAtomIds.containsKey(groundAtom);
 	}
 
+	@Override
+	public void removeAtom(int atomId) {
+		if (atomId <= 0 || atomId >= atomIdsToInternalBasicAtoms.size()) {
+			return;
+		}
+		Atom atom = atomIdsToInternalBasicAtoms.get(atomId);
+		if (atom == null) {
+			return;
+		}
+		atomIdsToInternalBasicAtoms.set(atomId, null);
+		predicateInstancesToAtomIds.remove(atom);
+		// atomCounter intentionally not decremented: it is an observability counter, not load-bearing
+		// for correctness.
+	}
+
 	/**
 	 * Removes the given atom from the AtomStoreImpl.
 	 * @param atomId

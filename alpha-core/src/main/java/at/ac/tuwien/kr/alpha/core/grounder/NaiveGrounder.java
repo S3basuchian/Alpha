@@ -29,9 +29,12 @@ package at.ac.tuwien.kr.alpha.core.grounder;
 
 import static at.ac.tuwien.kr.alpha.commons.util.Util.oops;
 import static at.ac.tuwien.kr.alpha.core.programs.atoms.Literals.atomOf;
+import static at.ac.tuwien.kr.alpha.core.programs.atoms.Literals.atomToLiteral;
+import static at.ac.tuwien.kr.alpha.core.programs.atoms.Literals.negateLiteral;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -98,8 +101,32 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 	private final Map<Integer, CompiledRule> knownNonGroundRules;
 
 	private ArrayList<CompiledRule> fixedRules = new ArrayList<>();
+	private final ArrayList<CompiledRule> pendingFixedRules = new ArrayList<>();
 	private LinkedHashSet<Atom> removeAfterObtainingNewNoGoods = new LinkedHashSet<>();
 	private final boolean debugInternalChecks;
+
+	/**
+	 * When {@code true}, this grounder runs in <em>session</em> mode: facts are materialized as
+	 * regular atoms in the {@link AtomStore} and forced TRUE via unit nogoods, rather than elided
+	 * from generated nogoods. This makes structural nogoods valid for any subset of seen facts and is
+	 * what enables fact retraction without re-grounding. See {@link NoGoodGenerator#keepFactsAsLiterals}.
+	 */
+	private final boolean sessionMode;
+
+	/**
+	 * Unit nogoods queued for the next {@link #getNoGoods(Assignment)} call. In session mode, every
+	 * fact added via {@link #extendWithFacts(Iterable)} produces a unit nogood that gets drained here
+	 * so the solver sees the new fact's truth assignment.
+	 */
+	private final ArrayList<NoGood> pendingFactUnitNoGoods = new ArrayList<>();
+
+	/**
+	 * In session mode, maps each currently-active fact atom's id to the id of its unit nogood. Used by
+	 * the {@link at.ac.tuwien.kr.alpha.api.impl.SessionGrounder} on retraction: a fact's unit nogood
+	 * must be excluded from replay when its fact has been retracted. Populated on bootstrap and on
+	 * {@link #extendWithFacts(Iterable)}, drained on {@link #retractFacts(Iterable)}.
+	 */
+	private final Map<Integer, Integer> factAtomToUnitNoGoodId = new LinkedHashMap<>();
 
 	private final GrounderHeuristicsConfiguration heuristicsConfiguration;
 
@@ -114,20 +141,33 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 
 	private NaiveGrounder(CompiledProgram program, AtomStore atomStore, GrounderHeuristicsConfiguration heuristicsConfiguration, boolean debugInternalChecks,
 			Bridge... bridges) {
-		this(program, atomStore, p -> true, heuristicsConfiguration, debugInternalChecks, bridges);
+		this(program, atomStore, p -> true, heuristicsConfiguration, debugInternalChecks, false, bridges);
 	}
 
 	NaiveGrounder(CompiledProgram program, AtomStore atomStore, java.util.function.Predicate<Predicate> filter,
 			GrounderHeuristicsConfiguration heuristicsConfiguration, boolean debugInternalChecks, Bridge... bridges) {
+		this(program, atomStore, filter, heuristicsConfiguration, debugInternalChecks, false, bridges);
+	}
+
+	public NaiveGrounder(CompiledProgram program, AtomStore atomStore, java.util.function.Predicate<Predicate> filter,
+			GrounderHeuristicsConfiguration heuristicsConfiguration, boolean debugInternalChecks, boolean sessionMode, Bridge... bridges) {
 		super(filter, bridges);
 		this.atomStore = atomStore;
 		this.heuristicsConfiguration = heuristicsConfiguration;
-		LOGGER.debug("Grounder configuration: {}", heuristicsConfiguration);
+		this.sessionMode = sessionMode;
+		LOGGER.debug("Grounder configuration: {} (sessionMode={})", heuristicsConfiguration, sessionMode);
 
 		this.program = program;
 
-		this.factsFromProgram = program.getFactsByPredicate();
-		this.knownNonGroundRules = program.getRulesById();
+		// Defensive mutable copies so the grounder can be extended incrementally
+		// via {@link #extendWithFacts}/{@link #extendWithRules}. All collaborators
+		// (noGoodGenerator, instantiationStrategy, analyzeUnjustified) hold the
+		// same reference and so will see updates.
+		this.factsFromProgram = new LinkedHashMap<>();
+		for (Map.Entry<Predicate, LinkedHashSet<Instance>> e : program.getFactsByPredicate().entrySet()) {
+			this.factsFromProgram.put(e.getKey(), new LinkedHashSet<>(e.getValue()));
+		}
+		this.knownNonGroundRules = new LinkedHashMap<>(program.getRulesById());
 
 		this.analyzeUnjustified = new AnalyzeUnjustified(this.program, this.atomStore, this.factsFromProgram);
 
@@ -135,7 +175,7 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 
 		final Set<CompiledRule> uniqueGroundRulePerGroundHead = getRulesWithUniqueHead();
 		choiceRecorder = new ChoiceRecorder(atomStore);
-		noGoodGenerator = new NoGoodGenerator(atomStore, choiceRecorder, factsFromProgram, this.program, uniqueGroundRulePerGroundHead);
+		noGoodGenerator = new NoGoodGenerator(atomStore, choiceRecorder, factsFromProgram, this.program, uniqueGroundRulePerGroundHead, sessionMode);
 
 		this.debugInternalChecks = debugInternalChecks;
 
@@ -182,7 +222,395 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 		}
 	}
 
+	/**
+	 * Incrementally extends this grounder with additional facts. New fact instances are added to the
+	 * factsFromProgram bookkeeping and pushed into {@link #workingMemory}, where they are marked as
+	 * recently-added so that the next call to {@link #getNoGoods(Assignment)} grounds any rules whose
+	 * starting literals are bound by them.
+	 *
+	 * Safe to call after {@link #bootstrap} has run; intended use is from {@code AlphaSessionImpl}
+	 * between {@code solve()} calls when only facts are added.
+	 *
+	 * @param newFacts facts to add (each fact's predicate is initialized in working memory on demand)
+	 */
+	public void extendWithFacts(Iterable<Atom> newFacts) {
+		for (Atom fact : newFacts) {
+			Predicate predicate = fact.getPredicate();
+			LinkedHashSet<Instance> bucket = factsFromProgram.computeIfAbsent(predicate, k -> new LinkedHashSet<>());
+			Instance instance = new Instance(fact.getTerms());
+			if (bucket.add(instance)) {
+				workingMemory.initialize(predicate);
+				workingMemory.addInstance(predicate, true, instance);
+				if (sessionMode) {
+					queueFactUnitNoGood(fact);
+				}
+			}
+		}
+	}
+
+	/**
+	 * Materialize a fact atom in the {@link AtomStore} and create the unit nogood that forces it TRUE.
+	 * The unit nogood is queued for the next {@link #getNoGoods(Assignment)} call, and the mapping from
+	 * the fact's atom id to its unit nogood id is recorded so that a later {@link #retractFacts}
+	 * can be matched up by the {@link at.ac.tuwien.kr.alpha.api.impl.SessionGrounder} during replay.
+	 *
+	 * Idempotent: if the fact atom already has a unit nogood, this is a no-op.
+	 */
+	private void queueFactUnitNoGood(Atom factAtom) {
+		int atomId = atomStore.putIfAbsent(factAtom);
+		if (factAtomToUnitNoGoodId.containsKey(atomId)) {
+			return;
+		}
+		NoGood unit = NoGood.fact(negateLiteral(atomToLiteral(atomId)));
+		int unitId = registry.register(unit);
+		factAtomToUnitNoGoodId.put(atomId, unitId);
+		pendingFactUnitNoGoods.add(unit);
+	}
+
+	/**
+	 * @return whether this grounder runs in session mode (facts materialized + retraction supported)
+	 */
+	public boolean isSessionMode() {
+		return sessionMode;
+	}
+
+	/**
+	 * @return the map from fact-atom id to its unit nogood id, for use by
+	 *         {@link at.ac.tuwien.kr.alpha.api.impl.SessionGrounder} when filtering cumulative nogoods
+	 *         during retraction replay. The returned map is the live internal view — read-only.
+	 */
+	public Map<Integer, Integer> getFactAtomToUnitNoGoodId() {
+		return java.util.Collections.unmodifiableMap(factAtomToUnitNoGoodId);
+	}
+
+	/**
+	 * @return true iff {@code predicate} has no rule defining it in the compiled program — i.e., its
+	 *         atoms can only ever be true via fact-assertion (a "pure fact" predicate). For such
+	 *         predicates, retraction also permits dropping the structural nogoods that reference the
+	 *         atom: with no defining rule and no fact, the atom can never become true again, so any
+	 *         structural nogood requiring it as a body literal is dead weight in the cumulative replay.
+	 *
+	 * <p>For predicates that DO have defining rules, structural nogoods must be retained even after
+	 * fact retraction, because a rule could still derive the atom.
+	 */
+	public boolean isPredicateOnlyDefinedAsFact(Predicate predicate) {
+		java.util.HashSet<CompiledRule> definingRules = program.getPredicateDefiningRules().get(predicate);
+		return definingRules == null || definingRules.isEmpty();
+	}
+
+	/**
+	 * @return true iff the given ground atom is currently asserted as a fact (present in
+	 *         {@code factsFromProgram} after applying any pending {@link #retractFacts}). Used by the
+	 *         {@link at.ac.tuwien.kr.alpha.api.impl.SessionGrounder} retraction GC to distinguish
+	 *         head atoms that are still alive (because the predicate is also a fact predicate and
+	 *         this specific atom is still asserted) from derived heads whose only support has
+	 *         been removed.
+	 */
+	public boolean isCurrentlyAFact(Atom atom) {
+		LinkedHashSet<Instance> bucket = factsFromProgram.get(atom.getPredicate());
+		if (bucket == null || bucket.isEmpty()) {
+			return false;
+		}
+		return bucket.contains(new Instance(atom.getTerms()));
+	}
+
+	/**
+	 * @return the atom store backing this grounder, exposed so the
+	 *         {@link at.ac.tuwien.kr.alpha.api.impl.SessionGrounder} can resolve an atom id back to its
+	 *         {@link Atom} (and thence to its {@link Predicate}) when classifying which cumulative
+	 *         nogoods are safe to suppress on retraction.
+	 */
+	public AtomStore getAtomStore() {
+		return atomStore;
+	}
+
+	/**
+	 * Drop the given nogood ids from the {@link NogoodRegistry}. After this call, re-registering an
+	 * equivalent NoGood (e.g., via re-grounding triggered by re-adding a previously-retracted fact)
+	 * allocates a fresh id and flows through the normal new-nogood accumulation path.
+	 *
+	 * Exposed for the session-mode retraction path; not intended for general grounder use.
+	 */
+	public void forgetNoGoods(Set<Integer> ids) {
+		registry.forget(ids);
+	}
+
+	/**
+	 * Purge the given derived atoms from the {@link WorkingMemory}. Used by the session-mode
+	 * retraction GC: when a derived atom is identified as dead (no live rule supports it anymore),
+	 * its working-memory entry from earlier shots would otherwise prevent re-grounding cascades. A
+	 * future {@link #updateAssignment} call for the same atom is a no-op if it's still in working
+	 * memory (because {@link WorkingMemory#addInstance} early-exits on containsInstance), so rules
+	 * starting on its predicate would not re-fire. Removing it here means re-derivation does re-mark
+	 * it as recently-added and downstream rules cascade correctly.
+	 *
+	 * @param deadDerivedAtomIds atom ids to purge; non-existent atoms are silently skipped
+	 */
+	public void purgeWorkingMemoryEntries(Set<Integer> deadDerivedAtomIds) {
+		for (int atomId : deadDerivedAtomIds) {
+			Atom atom = atomStore.get(atomId);
+			if (atom == null) {
+				continue;
+			}
+			Predicate predicate = atom.getPredicate();
+			if (!workingMemory.contains(predicate)) {
+				continue;
+			}
+			IndexedInstanceStorage positive = workingMemory.get(predicate, true);
+			Instance instance = new Instance(atom.getTerms());
+			if (positive.containsInstance(instance)) {
+				positive.markRecentlyAddedInstancesDone();
+				positive.removeInstance(instance);
+			}
+		}
+	}
+
+	/**
+	 * Retract the given facts from this grounder. Only valid in session mode. The facts are removed
+	 * from {@code factsFromProgram} and from the working memory; the mapping in
+	 * {@code factAtomToUnitNoGoodId} is updated so the {@link at.ac.tuwien.kr.alpha.api.impl.SessionGrounder}
+	 * can drop the corresponding unit nogoods from the next replay.
+	 *
+	 * Structural nogoods are NOT invalidated: in session mode they include fact literals explicitly,
+	 * so dropping the unit nogood is enough to flip the fact atom from forced-TRUE to free.
+	 *
+	 * @param retractedFacts facts to remove (those not present in factsFromProgram are silently skipped)
+	 * @return the set of atom ids whose unit nogoods should be excluded from the next solver's replay
+	 */
+	public Set<Integer> retractFacts(Iterable<Atom> retractedFacts) {
+		if (!sessionMode) {
+			throw new IllegalStateException("retractFacts requires session mode");
+		}
+		Set<Integer> dropped = new HashSet<>();
+		for (Atom fact : retractedFacts) {
+			Predicate predicate = fact.getPredicate();
+			LinkedHashSet<Instance> bucket = factsFromProgram.get(predicate);
+			if (bucket == null) {
+				continue;
+			}
+			Instance instance = new Instance(fact.getTerms());
+			if (!bucket.remove(instance)) {
+				continue;
+			}
+			// Remove from working memory's positive storage so further rule grounding sees the fact gone.
+			// IndexedInstanceStorage.removeInstance throws when there are unprocessed recently-added
+			// instances; in a retraction shot the recently-added queue may contain the just-added fact
+			// if it was added then immediately retracted, so drain first.
+			if (workingMemory.contains(predicate)) {
+				IndexedInstanceStorage positive = workingMemory.get(predicate, true);
+				positive.markRecentlyAddedInstancesDone();
+				if (positive.containsInstance(instance)) {
+					positive.removeInstance(instance);
+				}
+			}
+			// Locate this fact's atom id and detach its unit nogood from the active set.
+			if (atomStore.contains(fact)) {
+				int atomId = atomStore.get(fact);
+				if (factAtomToUnitNoGoodId.remove(atomId) != null) {
+					dropped.add(atomId);
+				}
+			}
+		}
+		return dropped;
+	}
+
+	/**
+	 * Incrementally extends this grounder with additional non-ground rules.  For each rule, predicates
+	 * occurring in it are initialized in working memory and its starting literals are registered, so
+	 * that subsequent calls to {@link #getNoGoods(Assignment)} will ground new instances on the fly.
+	 *
+	 * Rules with fixed instantiation (i.e. ground rules including facts produced by stratified
+	 * evaluation) are added to {@code factsFromProgram}/working memory directly via
+	 * {@link #extendWithFacts} for the head atoms; their bodies are assumed already satisfied at
+	 * this point.  Mixing fixed-instantiation rule addition into a live session is not currently
+	 * supported and will throw.
+	 *
+	 * @param newRules rules to add
+	 */
+	/**
+	 * Selectively re-marks previously-derived working-memory instances as recently-added so that a
+	 * freshly-constructed solver re-triggers grounding for ground rules that may have <em>new</em>
+	 * instantiations because of newly-added facts.
+	 *
+	 * <p>Algorithm: for each non-ground rule, if it has any positive body literal whose predicate is in
+	 * {@code newFactPredicates}, then every <em>other</em> positive body literal predicate of that rule
+	 * is a candidate for wake-up. Non-fact instances of those candidate predicates are re-marked as
+	 * recently-added so the grounder iterates them on the next {@link #getNoGoods(Assignment)} call and
+	 * generates the new ground rule instantiations that combine new facts with previously-derived atoms.
+	 *
+	 * <p>This avoids the blanket re-marking of <em>all</em> previously-derived atoms (the older
+	 * {@code prepareForNewSolver} behaviour), which over-triggered grounding for derived predicates that
+	 * are independent of the added fact predicates.  Specifically, derived predicates that appear only as
+	 * heads of rules with no shared body with the new facts are correctly left untouched — their already-
+	 * generated ground rules in the cumulative nogood set are sufficient.
+	 *
+	 * <p>Negative body literals are intentionally ignored: rules with negative literals are encoded into
+	 * choice nogoods in Alpha, and the negated atom can be freshly created (and chosen on) by the
+	 * solver without needing the underlying predicate's instances to be re-presented to the grounder.
+	 *
+	 * <p>If {@code newFactPredicates} is empty (e.g., a no-add re-solve), no wake-up is performed.
+	 *
+	 * @param newFactPredicates predicates whose fact instances were just added via
+	 *                          {@link #extendWithFacts}
+	 */
+	public void selectiveWakeUpForNewFacts(Set<Predicate> newFactPredicates) {
+		if (newFactPredicates.isEmpty()) {
+			return;
+		}
+		Set<Predicate> predicatesToWakeUp = new HashSet<>();
+		for (CompiledRule rule : knownNonGroundRules.values()) {
+			boolean ruleUsesChangedPredicate = false;
+			for (Literal lit : rule.getPositiveBody()) {
+				if (newFactPredicates.contains(lit.getPredicate())) {
+					ruleUsesChangedPredicate = true;
+					break;
+				}
+			}
+			if (!ruleUsesChangedPredicate) {
+				continue;
+			}
+			// If every new-fact predicate occurring in this rule's body is also a starting
+			// literal of the rule, new facts will retrigger the rule via their respective
+			// FirstBindingAtom variants — re-marking the other body predicates' existing
+			// instances would only duplicate joins (which dedup catches but the join work
+			// is wasted). This is the common case for recursive Datalog rules like
+			// reachable(X,Y) :- reachable(X,Z), edge(Z,Y), where both edge and reachable
+			// are starting literals: adding new edges fires the edge-starting variant
+			// automatically. If, however, some new-fact predicate is in the body but not a
+			// starting literal (e.g., its variables need binding from another literal first),
+			// we must still wake up the predicates that ARE starting so that (old-instance ×
+			// new-fact) joins are found.
+			Set<Predicate> startingPredicates = new HashSet<>();
+			for (Literal starting : rule.getGroundingInfo().getStartingLiterals()) {
+				startingPredicates.add(starting.getPredicate());
+			}
+			boolean allNewFactPredicatesInBodyAreStarting = true;
+			for (Literal lit : rule.getPositiveBody()) {
+				Predicate p = lit.getPredicate();
+				if (newFactPredicates.contains(p) && !startingPredicates.contains(p)) {
+					allNewFactPredicatesInBodyAreStarting = false;
+					break;
+				}
+			}
+			if (allNewFactPredicatesInBodyAreStarting) {
+				continue;
+			}
+			for (Literal lit : rule.getPositiveBody()) {
+				Predicate p = lit.getPredicate();
+				if (newFactPredicates.contains(p)) {
+					continue; // new facts already drive their own grounding via extendWithFacts
+				}
+				predicatesToWakeUp.add(p);
+			}
+		}
+		for (Predicate pred : predicatesToWakeUp) {
+			if (pred.isSolverInternal()) {
+				continue;
+			}
+			if (!workingMemory.getKnownPredicates().contains(pred)) {
+				continue;
+			}
+			IndexedInstanceStorage positive = workingMemory.get(pred, true);
+			// Skip storages with no rule starting on them — re-marking would leave the
+			// recently-added queue populated indefinitely (getNoGoods skips iteration when
+			// no FirstBindingAtom is registered for the storage).
+			ArrayList<FirstBindingAtom> firstBindingAtoms = rulesUsingPredicateWorkingMemory.get(positive);
+			if (firstBindingAtoms == null || firstBindingAtoms.isEmpty()) {
+				continue;
+			}
+			LinkedHashSet<Instance> factInstances = factsFromProgram.get(pred);
+			List<Instance> toReMark = new ArrayList<>();
+			for (Instance inst : positive.getAllInstances()) {
+				if (factInstances != null && factInstances.contains(inst)) {
+					continue;
+				}
+				toReMark.add(inst);
+			}
+			if (!toReMark.isEmpty()) {
+				positive.reMarkAsRecentlyAdded(toReMark);
+				workingMemory.markStorageModified(pred, true);
+			}
+		}
+	}
+
+	public void extendWithRules(Iterable<CompiledRule> newRules) {
+		for (CompiledRule rule : newRules) {
+			if (knownNonGroundRules.put(rule.getRuleId(), rule) != null) {
+				continue; // already known, skip
+			}
+			for (Predicate predicate : rule.getOccurringPredicates()) {
+				workingMemory.initialize(predicate);
+			}
+			if (rule.getGroundingInfo().hasFixedInstantiation()) {
+				// Fixed-instantiation rule (ground rule, including ground constraints like ":- a.").
+				// Queue for grounding on next getNoGoods call — same path as the bootstrap mechanism
+				// uses for the initial program's fixed rules.
+				pendingFixedRules.add(rule);
+			} else {
+				for (Literal literal : rule.getGroundingInfo().getStartingLiterals()) {
+					registerLiteralAtWorkingMemory(literal, rule);
+				}
+			}
+		}
+	}
+
+	/**
+	 * After {@link #extendWithRules}, re-mark <em>all</em> existing instances of the new rules'
+	 * positive body predicates as recently-added so the grounder iterates them on the next
+	 * {@link #getNoGoods(Assignment)} call. Without this, a new rule registered against working
+	 * memory only fires on instances added <em>after</em> registration, never on the existing ones.
+	 *
+	 * Unlike {@link #selectiveWakeUpForNewFacts}, this includes <em>both</em> fact and derived
+	 * instances because the new rule has not seen any of them.
+	 *
+	 * @param newRules rules just added via {@link #extendWithRules}
+	 */
+	public void selectiveWakeUpForNewRules(Iterable<CompiledRule> newRules) {
+		Set<Predicate> predicatesToWakeUp = new HashSet<>();
+		for (CompiledRule rule : newRules) {
+			if (rule.getGroundingInfo().hasFixedInstantiation()) {
+				// Fixed-instantiation rules are ground by the pendingFixedRules drain in getNoGoods;
+				// they don't need existing instances re-marked because they don't join over them.
+				continue;
+			}
+			for (Literal lit : rule.getPositiveBody()) {
+				predicatesToWakeUp.add(lit.getPredicate());
+			}
+		}
+		for (Predicate pred : predicatesToWakeUp) {
+			if (pred.isSolverInternal()) {
+				continue;
+			}
+			if (!workingMemory.getKnownPredicates().contains(pred)) {
+				continue;
+			}
+			IndexedInstanceStorage positive = workingMemory.get(pred, true);
+			// Skip storages with no rule starting on them (see selectiveWakeUpForNewFacts).
+			ArrayList<FirstBindingAtom> firstBindingAtoms = rulesUsingPredicateWorkingMemory.get(positive);
+			if (firstBindingAtoms == null || firstBindingAtoms.isEmpty()) {
+				continue;
+			}
+			List<Instance> toReMark = new ArrayList<>(positive.getAllInstances());
+			if (!toReMark.isEmpty()) {
+				positive.reMarkAsRecentlyAdded(toReMark);
+				workingMemory.markStorageModified(pred, true);
+			}
+		}
+	}
+
 	private Set<CompiledRule> getRulesWithUniqueHead() {
+		// In session mode the unique-head support optimisation is unsound. The optimisation emits a support
+		// nogood {Tp, F(body)} ("p can only be true via this single body") for any head p whose predicate
+		// has exactly one defining rule and no facts. A fact for p added in a LATER shot gives p an
+		// additional, empty-body support; the stale support nogood then forces the body true whenever the
+		// fact forces p true, wrongly eliminating answer sets in which the body is false (e.g. "{a}. p:-a."
+		// then adding fact "p." loses the answer set {p}). The check below already disables the optimisation
+		// when a fact for the head is present at bootstrap, but session mode cannot see future facts, so it
+		// must forgo the optimisation entirely. Foundedness is then handled by the choice/unfoundedness
+		// mechanism, exactly as it already is for predicates defined by more than one rule.
+		if (sessionMode) {
+			return java.util.Collections.emptySet();
+		}
 		// FIXME: below optimisation (adding support nogoods if there is only one rule instantiation per unique atom over the interpretation) could
 		// be done as a transformation (adding a non-ground constraint corresponding to the nogood that is generated by the grounder).
 		// Record all unique rule heads.
@@ -260,25 +688,30 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 		}
 
 		// Add true atoms from facts.
-		for (Map.Entry<Predicate, LinkedHashSet<Instance>> facts : factsFromProgram.entrySet()) {
-			Predicate factPredicate = facts.getKey();
-			// Skip atoms over internal predicates.
-			if (factPredicate.isInternal()) {
-				continue;
-			}
-			// Skip filtered predicates.
-			if (!filter.test(factPredicate)) {
-				continue;
-			}
-			// Skip predicates without any instances.
-			if (facts.getValue().isEmpty()) {
-				continue;
-			}
-			knownPredicates.add(factPredicate);
-			predicateInstances.putIfAbsent(factPredicate, new TreeSet<>());
-			for (Instance factInstance : facts.getValue()) {
-				SortedSet<Atom> instances = predicateInstances.get(factPredicate);
-				instances.add(Atoms.newBasicAtom(factPredicate, factInstance.terms));
+		// In session mode, facts are already represented as real atoms in the assignment (via unit
+		// nogoods), so they appear in trueAtoms and are picked up by the loop above — re-adding them
+		// here is redundant (TreeSet dedups but the iteration is wasted work).
+		if (!sessionMode) {
+			for (Map.Entry<Predicate, LinkedHashSet<Instance>> facts : factsFromProgram.entrySet()) {
+				Predicate factPredicate = facts.getKey();
+				// Skip atoms over internal predicates.
+				if (factPredicate.isInternal()) {
+					continue;
+				}
+				// Skip filtered predicates.
+				if (!filter.test(factPredicate)) {
+					continue;
+				}
+				// Skip predicates without any instances.
+				if (facts.getValue().isEmpty()) {
+					continue;
+				}
+				knownPredicates.add(factPredicate);
+				predicateInstances.putIfAbsent(factPredicate, new TreeSet<>());
+				for (Instance factInstance : facts.getValue()) {
+					SortedSet<Atom> instances = predicateInstances.get(factPredicate);
+					instances.add(Atoms.newBasicAtom(factPredicate, factInstance.terms));
+				}
 			}
 		}
 
@@ -302,6 +735,19 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 			workingMemory.addInstances(predicate, true, factsFromProgram.get(predicate));
 		}
 
+		// In session mode, materialize each fact as a real atom in the AtomStore and queue its unit
+		// nogood so the solver assigns it TRUE on its next propagation cycle. Done before fixed-rule
+		// grounding so that fact-keeping NoGoodGenerator paths can putIfAbsent against an AtomStore
+		// that already knows about the facts (avoids duplicate id allocation).
+		if (sessionMode) {
+			for (Map.Entry<Predicate, LinkedHashSet<Instance>> entry : factsFromProgram.entrySet()) {
+				Predicate predicate = entry.getKey();
+				for (Instance instance : entry.getValue()) {
+					queueFactUnitNoGood(at.ac.tuwien.kr.alpha.commons.programs.atoms.Atoms.newBasicAtom(predicate, instance.terms));
+				}
+			}
+		}
+
 		for (CompiledRule nonGroundRule : fixedRules) {
 			// Generate NoGoods for all rules that have a fixed grounding.
 			RuleGroundingOrder groundingOrder = nonGroundRule.getGroundingInfo().getFixedGroundingOrder();
@@ -319,11 +765,42 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 		// In first call, prepare facts and ground rules.
 		final Map<Integer, NoGood> newNoGoods = fixedRules != null ? bootstrap() : new LinkedHashMap<>();
 
+		// In session mode, drain any fact unit nogoods queued by bootstrap() or by extendWithFacts()
+		// since the last call. They must be emitted to the solver so the new fact atoms get assigned TRUE.
+		if (!pendingFactUnitNoGoods.isEmpty()) {
+			for (NoGood unit : pendingFactUnitNoGoods) {
+				// register() handles deduplication via NoGood equality; we just need the id.
+				int id = registry.register(unit);
+				newNoGoods.putIfAbsent(id, unit);
+			}
+			pendingFactUnitNoGoods.clear();
+		}
+
+		// Drain any pending fixed-instantiation rules added via extendWithRules since last call.
+		// Like bootstrap(), pass a null assignment: fixed-instantiation rules are evaluated against
+		// the program structure, not the solver's current truth assignment, so passing the
+		// (typically empty) live assignment would cause the instantiation strategy to reject body
+		// literals as unassigned and silently drop the rule.
+		if (!pendingFixedRules.isEmpty()) {
+			for (CompiledRule nonGroundRule : pendingFixedRules) {
+				RuleGroundingOrder groundingOrder = nonGroundRule.getGroundingInfo().getFixedGroundingOrder();
+				BindingResult bindingResult = getGroundInstantiations(nonGroundRule, groundingOrder,
+						new BasicSubstitution(), null);
+				groundAndRegister(nonGroundRule, bindingResult.getGeneratedSubstitutions(), newNoGoods);
+			}
+			pendingFixedRules.clear();
+		}
+
 		// Compute new ground rule (evaluate joins with newly changed atoms)
 		for (IndexedInstanceStorage modifiedWorkingMemory : workingMemory.modified()) {
 			// Skip predicates solely used in the solver which do not occur in rules.
 			Predicate workingMemoryPredicate = modifiedWorkingMemory.getPredicate();
 			if (workingMemoryPredicate.isSolverInternal()) {
+				// Still clear recently-added so the next getNoGoods call can re-process these
+				// storages cleanly. Without this, recently-added entries accumulate across
+				// solves on solver-internal storages and trigger an exception later when
+				// removeAfterObtainingNewNoGoods tries to remove an instance.
+				modifiedWorkingMemory.markRecentlyAddedInstancesDone();
 				continue;
 			}
 
@@ -332,6 +809,7 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 
 			// Skip working memories that are not used by any rule.
 			if (firstBindingAtoms == null) {
+				modifiedWorkingMemory.markRecentlyAddedInstancesDone();
 				continue;
 			}
 

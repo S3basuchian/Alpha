@@ -28,6 +28,7 @@
 package at.ac.tuwien.kr.alpha.api.impl;
 
 import at.ac.tuwien.kr.alpha.api.Alpha;
+import at.ac.tuwien.kr.alpha.api.AlphaSession;
 import at.ac.tuwien.kr.alpha.api.AnswerSet;
 import at.ac.tuwien.kr.alpha.api.DebugSolvingContext;
 import at.ac.tuwien.kr.alpha.api.Solver;
@@ -102,6 +103,11 @@ public class AlphaImpl implements Alpha {
 		this(new SystemConfig());
 	}
 
+	/** Accessor used by {@link AlphaSessionImpl} when it needs to inspect the configured options. */
+	SystemConfig getSystemConfig() {
+		return config;
+	}
+
 	@Override
 	public ASPCore2Program readProgram(InputConfig cfg) throws IOException {
 		ASPCore2ProgramBuilder prgBuilder = Programs.builder();
@@ -163,6 +169,17 @@ public class AlphaImpl implements Alpha {
 			retVal = new StratifiedEvaluation().apply(analyzed);
 		}
 		return retVal;
+	}
+
+	/**
+	 * Like {@link #performProgramPreprocessing} but never runs stratified evaluation. Used by
+	 * {@link AlphaSessionImpl}: stratified evaluation prunes rules whose heads it pre-derives into
+	 * facts, which would break incremental state retention because newly added facts can no longer
+	 * trigger those rules.
+	 */
+	InternalProgram performInternalProgramConstructionWithoutStratifiedEval(NormalProgram program) {
+		LOGGER.debug("Preprocessing InternalProgram (without stratified evaluation)");
+		return InternalProgram.fromNormalProgram(program);
 	}
 
 	/**
@@ -301,6 +318,16 @@ public class AlphaImpl implements Alpha {
 	@Override
 	public Solver prepareSolverFor(NormalProgram program, java.util.function.Predicate<Predicate> filter) {
 		return prepareSolverFor(performProgramPreprocessing(program), filter);
+	}
+
+	@Override
+	public AlphaSession newSession() {
+		return new AlphaSessionImpl(this);
+	}
+
+	@Override
+	public AlphaSession newSession(ASPCore2Program program) {
+		return new AlphaSessionImpl(this, program);
 	}
 
 	@Override

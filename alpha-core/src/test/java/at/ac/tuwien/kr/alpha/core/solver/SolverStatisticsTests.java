@@ -94,7 +94,7 @@ public class SolverStatisticsTests {
 		// To be perfectly clean, we need to introduce an interface in core module that extends StatisticsReportingSolver with getNoGoodCounter()
 		DefaultSolver solverMaintainingStatistics = (DefaultSolver) solver;
 		final NoGoodCounter noGoodCounter =  solverMaintainingStatistics.getNoGoodCounter();
-		assertEquals("STATIC: " + expectedNumberOfStaticNoGoods + " SUPPORT: " + expectedNumberOfSupportNoGoods + " LEARNT: " + expectedNumberOfLearntNoGoods + " INTERNAL: " + expectedNumberOfInternalNoGoods, noGoodCounter.getStatsByType());
+		assertEquals("STATIC: " + expectedNumberOfStaticNoGoods + " SUPPORT: " + expectedNumberOfSupportNoGoods + " LEARNT: " + expectedNumberOfLearntNoGoods + " INTERNAL: " + expectedNumberOfInternalNoGoods + " ENUMERATION: 0", noGoodCounter.getStatsByType());
 	}
 
 	private void collectAnswerSetsAndCheckNoGoodCounterStatsByCardinality(Solver solver, int expectedNumberOfUnaryNoGoods, int expectedNumberOfBinaryNoGoods, int expectedNumberOfNAryNoGoods) {

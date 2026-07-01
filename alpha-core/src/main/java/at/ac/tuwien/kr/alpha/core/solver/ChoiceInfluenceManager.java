@@ -164,6 +164,27 @@ public class ChoiceInfluenceManager implements Checkable {
 		}
 	}
 
+	/**
+	 * Reset for a fresh solving shot after the assignment was cleared: forget the active-choice-point
+	 * bookkeeping and re-register the per-atom change callbacks (which {@link WritableAssignment#clear()}
+	 * wiped). The choice-point structure itself (the {@code influencers} array) is retained.
+	 */
+	void resetForNewShot() {
+		activeChoicePoints.clear();
+		activeChoicePointsAtoms.clear();
+		for (int atom = 0; atom < influencers.length; atom++) {
+			ChoicePoint choicePoint = influencers[atom];
+			// influencers references each ChoicePoint from its atom/enabler/disabler slot; handle each once.
+			if (choicePoint == null || choicePoint.atom != atom) {
+				continue;
+			}
+			choicePoint.isActive = false;
+			assignment.registerCallbackOnChange(choicePoint.atom);
+			assignment.registerCallbackOnChange(choicePoint.enabler);
+			assignment.registerCallbackOnChange(choicePoint.disabler);
+		}
+	}
+
 	public void growForMaxAtomId(int maxAtomId) {
 		// Grow arrays only if needed.
 		if (influencers.length > maxAtomId) {

@@ -111,4 +111,21 @@ public class WorkingMemory {
 	public Set<IndexedInstanceStorage> modified() {
 		return modifiedWorkingMemories;
 	}
+
+	/**
+	 * Returns the predicates known to this working memory. Intended for grounder introspection.
+	 */
+	public Set<Predicate> getKnownPredicates() {
+		return workingMemory.keySet();
+	}
+
+	/**
+	 * Marks the storage of the given predicate (positive side) as modified, so the next
+	 * grounding pass iterates it.
+	 */
+	public void markStorageModified(Predicate predicate, boolean positive) {
+		if (workingMemory.containsKey(predicate)) {
+			modifiedWorkingMemories.add(get(predicate, positive));
+		}
+	}
 }

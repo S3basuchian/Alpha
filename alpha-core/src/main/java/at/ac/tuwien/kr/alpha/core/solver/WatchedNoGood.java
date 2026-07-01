@@ -147,6 +147,11 @@ public final class WatchedNoGood implements NoGoodInterface, Antecedent {
 	}
 
 	@Override
+	public boolean fromEnumeration() {
+		return type == Type.ENUMERATION;
+	}
+
+	@Override
 	public Iterator<Integer> iterator() {
 		return new Iterator<Integer>() {
 			private int i;

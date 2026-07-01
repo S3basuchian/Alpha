@@ -36,6 +36,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -296,6 +297,183 @@ public class TrailAssignment implements WritableAssignment, Checkable {
 	public void backtrack() {
 		removeLastDecisionLevel();
 		resetTrailPointersAndReplayOutOfOrderLiterals();
+	}
+
+	@Override
+	public void unassignAtDecisionLevelZeroWithDependents(Iterable<Integer> seedAtoms,
+			java.util.function.BiPredicate<Integer, Antecedent> antecedentRemoved) {
+		Set<Integer> toRemove = new HashSet<>();
+		for (Integer atom : seedAtoms) {
+			if (atom != null && values[atom] != 0 && getWeakDecisionLevel(atom) == 0) {
+				toRemove.add(atom);
+			}
+		}
+		// Seed any dl-0 atom whose antecedent itself is being removed. This covers non-unary enum/learned
+		// nogoods that propagated at dl 0 from reasons that aren't transitively reachable from the explicit
+		// seeds — e.g. a binary enum nogood {a, b} where a was true at dl 0 from a structural fact.
+		for (int i = 0; i < trailSize; i++) {
+			int atom = atomOf(trail[i]);
+			if (atom == 0 || values[atom] == 0) {
+				continue;
+			}
+			if (toRemove.contains(atom)) {
+				continue;
+			}
+			if (getWeakDecisionLevel(atom) != 0) {
+				continue;
+			}
+			Antecedent ant = impliedBy[atom];
+			if (ant == null || ant == CLOSING_INDICATOR_ANTECEDENT) {
+				continue;
+			}
+			if (antecedentRemoved.test(atom, ant)) {
+				toRemove.add(atom);
+			}
+		}
+		if (toRemove.isEmpty()) {
+			return;
+		}
+		boolean changed;
+		do {
+			changed = false;
+			for (int i = 0; i < trailSize; i++) {
+				int atom = atomOf(trail[i]);
+				if (atom == 0 || values[atom] == 0) {
+					// Stale trail entry: removeLastDecisionLevel zeroes values but leaves the trail
+					// slot, and an atom can appear twice in the trail (MBT then TRUE upgrade).
+					continue;
+				}
+				if (toRemove.contains(atom)) {
+					continue;
+				}
+				if (getWeakDecisionLevel(atom) != 0) {
+					continue;
+				}
+				Antecedent ant = impliedBy[atom];
+				if (ant == null || ant == CLOSING_INDICATOR_ANTECEDENT) {
+					continue;
+				}
+				// Resolve shallow (binary) antecedents to a full literal list so the dependency check works.
+				int[] reasons;
+				if (ant instanceof ShallowAntecedent) {
+					reasons = ((ShallowAntecedent) ant)
+							.instantiateAntecedent(atomToLiteral(atom, !getTruth(atom).toBoolean()))
+							.getReasonLiterals();
+				} else {
+					reasons = ant.getReasonLiterals();
+				}
+				for (int reasonLit : reasons) {
+					int reasonAtom = atomOf(reasonLit);
+					if (reasonAtom != atom && toRemove.contains(reasonAtom)) {
+						toRemove.add(atom);
+						changed = true;
+						break;
+					}
+				}
+			}
+		} while (changed);
+		unassignManyAtDecisionLevelZero(toRemove);
+	}
+
+	@Override
+	public void unassignClosingAssignmentsAtDecisionLevelZero() {
+		// Snapshot atoms first — un-assigning mutates the trail.
+		List<Integer> closingAtoms = new ArrayList<>();
+		for (int i = 0; i < trailSize; i++) {
+			int atom = atomOf(trail[i]);
+			if (atom == 0 || values[atom] == 0) {
+				continue;
+			}
+			if (getWeakDecisionLevel(atom) != 0) {
+				continue;
+			}
+			if (impliedBy[atom] == CLOSING_INDICATOR_ANTECEDENT) {
+				closingAtoms.add(atom);
+			}
+		}
+		unassignManyAtDecisionLevelZero(closingAtoms);
+	}
+
+	@Override
+	public void unassignManyAtDecisionLevelZero(Collection<Integer> atomsToUnassign) {
+		if (atomsToUnassign == null || atomsToUnassign.isEmpty()) {
+			return;
+		}
+		// Phase 1: validate and clear per-atom state (values, decision levels, antecedents). Dedupe via
+		// the `removed` set so duplicate atoms in the input don't double-decrement mbtCount.
+		Set<Integer> removed = new HashSet<>(Math.max(16, atomsToUnassign.size() * 2));
+		for (Integer atomObj : atomsToUnassign) {
+			if (atomObj == null) {
+				continue;
+			}
+			int atom = atomObj;
+			if (values[atom] == 0 || getWeakDecisionLevel(atom) != 0) {
+				continue;
+			}
+			if (!removed.add(atom)) {
+				continue;
+			}
+			if (getTruth(atom) == MBT) {
+				mbtCount--;
+			}
+			values[atom] = 0;
+			strongDecisionLevels[atom] = -1;
+			impliedBy[atom] = null;
+			informCallback(atom);
+		}
+		if (removed.isEmpty()) {
+			return;
+		}
+
+		// Phase 2: single sweep over the trail. Compact in place, counting how many removed entries
+		// fall strictly before each pointer/boundary so we can adjust them once at the end. This
+		// matches the per-atom method's `> i` strict comparison: a pointer that sits exactly on a
+		// removed entry stays put (it logically references what was at the next slot, which has now
+		// shifted left into the pointer's position).
+		int decreasesBeforeNextPos = 0;
+		int decreasesBeforeNewAsg = 0;
+		final int dlCount = trailIndicesOfDecisionLevels.size();
+		int[] decreasesBeforeDl = dlCount > 1 ? new int[dlCount] : null;
+
+		int write = 0;
+		for (int read = 0; read < trailSize; read++) {
+			int lit = trail[read];
+			if (removed.contains(atomOf(lit))) {
+				if (nextPositionInTrail > read) {
+					decreasesBeforeNextPos++;
+				}
+				if (newAssignmentsIterator > read) {
+					decreasesBeforeNewAsg++;
+				}
+				if (decreasesBeforeDl != null) {
+					for (int dl = 1; dl < dlCount; dl++) {
+						if (trailIndicesOfDecisionLevels.get(dl) > read) {
+							decreasesBeforeDl[dl]++;
+						}
+					}
+				}
+			} else {
+				if (write != read) {
+					trail[write] = lit;
+				}
+				write++;
+			}
+		}
+		// Zero the now-unused tail slots so stale literals don't linger past trailSize.
+		for (int k = write; k < trailSize; k++) {
+			trail[k] = 0;
+		}
+		trailSize = write;
+		nextPositionInTrail -= decreasesBeforeNextPos;
+		newAssignmentsIterator -= decreasesBeforeNewAsg;
+		if (decreasesBeforeDl != null) {
+			for (int dl = 1; dl < dlCount; dl++) {
+				if (decreasesBeforeDl[dl] > 0) {
+					trailIndicesOfDecisionLevels.set(dl, trailIndicesOfDecisionLevels.get(dl) - decreasesBeforeDl[dl]);
+				}
+			}
+		}
+		didChange = true;
 	}
 
 	@Override

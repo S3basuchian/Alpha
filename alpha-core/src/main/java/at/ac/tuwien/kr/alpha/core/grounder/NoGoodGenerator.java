@@ -64,12 +64,32 @@ public class NoGoodGenerator {
 	private final CompiledProgram programAnalysis;
 	private final Set<CompiledRule> uniqueGroundRulePerGroundHead;
 
+	/**
+	 * When {@code true}, fact literals are <em>not</em> elided from generated nogoods: positive fact literals
+	 * are kept as body literals, and rules with fact-true negative literals are <em>not</em> killed at
+	 * grounding time. Instead, fact atoms are assumed to be present in the {@link AtomStore} and to be
+	 * forced TRUE by unit nogoods supplied separately (by {@link NaiveGrounder#bootstrap()} and
+	 * {@link NaiveGrounder#extendWithFacts(Iterable)} in session mode). Structural nogoods are then valid
+	 * for <em>any</em> subset of seen facts: a fact retraction is realized by removing/inverting its unit
+	 * nogood, without invalidating any structural nogood.
+	 *
+	 * This is the no-elision mode used by {@code AlphaSession} when configured for retraction. Default
+	 * one-shot solving keeps elision on for nogood size + propagation speed.
+	 */
+	private final boolean keepFactsAsLiterals;
+
 	NoGoodGenerator(AtomStore atomStore, ChoiceRecorder recorder, Map<Predicate, LinkedHashSet<Instance>> factsFromProgram, CompiledProgram programAnalysis, Set<CompiledRule> uniqueGroundRulePerGroundHead) {
+		this(atomStore, recorder, factsFromProgram, programAnalysis, uniqueGroundRulePerGroundHead, false);
+	}
+
+	NoGoodGenerator(AtomStore atomStore, ChoiceRecorder recorder, Map<Predicate, LinkedHashSet<Instance>> factsFromProgram, CompiledProgram programAnalysis,
+			Set<CompiledRule> uniqueGroundRulePerGroundHead, boolean keepFactsAsLiterals) {
 		this.atomStore = atomStore;
 		this.choiceRecorder = recorder;
 		this.factsFromProgram = factsFromProgram;
 		this.programAnalysis = programAnalysis;
 		this.uniqueGroundRulePerGroundHead = uniqueGroundRulePerGroundHead;
+		this.keepFactsAsLiterals = keepFactsAsLiterals;
 	}
 
 	/**
@@ -144,16 +164,34 @@ public class NoGoodGenerator {
 		final List<Integer> bodyLiteralsNegative = new ArrayList<>();
 		for (Literal lit : nonGroundRule.getNegativeBody()) {
 			Atom groundAtom = lit.getAtom().substitute(substitution);
-			
-			final Set<Instance> factInstances = factsFromProgram.get(groundAtom.getPredicate());
 
-			if (factInstances != null && factInstances.contains(new Instance(groundAtom.getTerms()))) {
-				// Negative atom that is always true encountered, skip whole rule as it will never fire.
+			final Set<Instance> factInstances = factsFromProgram.get(groundAtom.getPredicate());
+			final boolean isFact = factInstances != null && factInstances.contains(new Instance(groundAtom.getTerms()));
+
+			if (isFact) {
+				if (keepFactsAsLiterals) {
+					// Session mode: keep the negative literal so the structural nogood remains valid for any
+					// subset of seen facts. The fact atom's unit nogood will force it TRUE, so this negative
+					// literal will be falsified at solve time — yielding the same rule-killing effect as the
+					// classic elision, but without baking the current fact set into the nogood.
+					bodyLiteralsNegative.add(atomToLiteral(atomStore.putIfAbsent(groundAtom)));
+					continue;
+				}
+				// Classic mode: negative atom that is always true encountered, skip whole rule as it will never fire.
 				return null;
 			}
 
 			if (!existsRuleWithPredicateInHead(groundAtom.getPredicate())) {
-				// Negative atom is no fact and no rule defines it, it is always false, skip it.
+				if (keepFactsAsLiterals) {
+					// Session mode: the predicate is empty now (no fact, no defining rule), but a fact for it
+					// may be added in a later shot. Keep the negative literal so the structural nogood references
+					// the atom. With no support the atom stays FALSE now, so the rule fires exactly as the classic
+					// elision would; a later fact's unit nogood forces the atom TRUE and falsifies this body. This
+					// is the same soundness fix as the isFact branch above, for the not-yet-a-fact case.
+					bodyLiteralsNegative.add(atomToLiteral(atomStore.putIfAbsent(groundAtom)));
+					continue;
+				}
+				// Classic mode: negative atom is no fact and no rule defines it, it is always false, skip it.
 				continue;
 			}
 
@@ -180,16 +218,33 @@ public class NoGoodGenerator {
 
 			final Atom groundAtom = atom.substitute(substitution);
 
-			// Consider facts to eliminate ground atoms from the generated nogoods that are always true
-			// and eliminate nogoods that are always satisfied due to facts.
 			Set<Instance> factInstances = factsFromProgram.get(groundAtom.getPredicate());
-			if (factInstances != null && factInstances.contains(new Instance(groundAtom.getTerms()))) {
-				// Skip positive atoms that are always true.
+			final boolean isFact = factInstances != null && factInstances.contains(new Instance(groundAtom.getTerms()));
+
+			if (isFact) {
+				if (keepFactsAsLiterals) {
+					// Session mode: keep the positive literal so the structural nogood remains valid for any
+					// subset of seen facts. The fact atom's unit nogood will force it TRUE, so propagation
+					// gives the same rule-firing behaviour as the classic elision, but the nogood survives
+					// retraction of the fact.
+					bodyLiteralsPositive.add(atomToLiteral(atomStore.putIfAbsent(groundAtom)));
+					continue;
+				}
+				// Classic mode: skip positive atoms that are always true (elide from generated nogood).
 				continue;
 			}
 
 			if (!existsRuleWithPredicateInHead(groundAtom.getPredicate())) {
-				// Atom is no fact and no rule defines it, it cannot be derived (i.e., is always false), skip whole rule as it will never fire.
+				if (keepFactsAsLiterals) {
+					// Session mode: the predicate is empty now (no fact, no defining rule), but a fact for it
+					// may be added in a later shot. Keep the positive literal rather than killing the rule. With
+					// no support the atom stays FALSE now, so the body stays false and the rule does not fire;
+					// a later fact's unit nogood forces the atom TRUE and lets the body (and head) become true.
+					// Symmetric to the negative case in collectNegLiterals.
+					bodyLiteralsPositive.add(atomToLiteral(atomStore.putIfAbsent(groundAtom)));
+					continue;
+				}
+				// Classic mode: atom is no fact and no rule defines it, it cannot be derived (i.e., is always false), skip whole rule as it will never fire.
 				return null;
 			}
 

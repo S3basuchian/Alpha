@@ -91,5 +91,14 @@ public interface NoGoodInterface extends Iterable<Integer> {
 		 * Nogood containing solver-internal atoms
 		 */
 		INTERNAL,
+
+		/**
+		 * Shot-local nogood blocking an already-enumerated answer set. Added by
+		 * {@code DefaultSolver.prepareForSubsequentAnswerSet} to prevent re-discovery of an answer set
+		 * within the current shot. Removable: a session must purge these between shots because they are
+		 * only valid for the program at the time the answer set was found and would invalidly block
+		 * valid answer sets of an extended program.
+		 */
+		ENUMERATION,
 	}
 }

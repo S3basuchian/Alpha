@@ -96,6 +96,53 @@ public interface WritableAssignment extends Assignment {
 	}
 
 	/**
+	 * Un-assigns every atom in the supplied collection at decision level 0 with a single trail
+	 * compaction sweep (O(trail) total rather than O(removed × trail) for repeated single-atom calls).
+	 * Atoms not currently assigned at dl 0 are silently skipped; duplicates in the input are tolerated.
+	 *
+	 * @param atomsToUnassign atoms whose dl-0 assignments should be cleared
+	 */
+	void unassignManyAtDecisionLevelZero(java.util.Collection<Integer> atomsToUnassign);
+
+	/**
+	 * Reverts every assignment that was made by {@code closeUnassignedAtoms} at decision level 0. Used by
+	 * {@code DefaultSolver.resetForNewShot} between shots: closing assignments are valid only for the
+	 * answer set of the shot in which they were made — in the next shot, new rules / facts may derive
+	 * the closed atoms TRUE, which would conflict with the stale FALSE assignment if not cleared first.
+	 */
+	void unassignClosingAssignmentsAtDecisionLevelZero();
+
+	/**
+	 * Un-assigns each seed atom at decision level 0, transitively also un-assigning any dl-0 atom whose
+	 * antecedent's reason literals reference an atom already in the un-assign set. Used by
+	 * {@code NoGoodStoreAlphaRoaming.purgeEnumerationNoGoods()}: when a unary enumeration nogood is
+	 * removed, the cascade of dl-0 propagations triggered by its forced assignment must be undone as
+	 * well, otherwise dependent atoms remain pinned by now-invalid antecedents and block valid answer
+	 * sets in the next shot.
+	 *
+	 * @param seedAtoms atoms whose dl-0 assignments must be removed, along with all dl-0 atoms whose
+	 *                  forcing transitively depends on them
+	 */
+	default void unassignAtDecisionLevelZeroWithDependents(Iterable<Integer> seedAtoms) {
+		unassignAtDecisionLevelZeroWithDependents(seedAtoms, (atom, ant) -> false);
+	}
+
+	/**
+	 * Variant of {@link #unassignAtDecisionLevelZeroWithDependents(Iterable)} that also un-assigns any
+	 * dl-0 atom whose antecedent is itself being removed, as reported by {@code antecedentRemoved}.
+	 * Reason-atom chains alone are insufficient when a non-unary enumeration or learned nogood
+	 * propagated at dl 0 from purely structural reasons — the cascade would never reach the forced
+	 * atom, leaving it pinned with a dangling antecedent after the nogood is purged.
+	 *
+	 * @param seedAtoms          atoms whose dl-0 assignments must be removed
+	 * @param antecedentRemoved  predicate over {@code (atom, impliedBy[atom])} that returns true when
+	 *                           the antecedent itself is being purged, so the atom should be seeded
+	 *                           into the removal set
+	 */
+	void unassignAtDecisionLevelZeroWithDependents(Iterable<Integer> seedAtoms,
+			java.util.function.BiPredicate<Integer, Antecedent> antecedentRemoved);
+
+	/**
 	 * Assigns all unassigned atoms to FALSE.
 	 * @return true if any atom was assigned.
 	 */

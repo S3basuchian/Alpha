@@ -150,6 +150,24 @@ public interface Alpha {
 	Solver prepareSolverFor(NormalProgram program, java.util.function.Predicate<Predicate> filter);
 
 	/**
+	 * Creates a new, empty {@link AlphaSession} for basic incremental solving. The session lets the caller
+	 * accumulate rules and facts across multiple {@code add} calls and compute answer sets at any point via
+	 * {@code solve}. See {@link AlphaSession} for the semantics.
+	 *
+	 * @return a new, empty incremental solving session
+	 */
+	AlphaSession newSession();
+
+	/**
+	 * Creates a new {@link AlphaSession} pre-loaded with the given program. Equivalent to
+	 * {@code newSession()} followed by {@code add(program)}.
+	 *
+	 * @param program an initial program to seed the session with
+	 * @return a new incremental solving session pre-loaded with {@code program}
+	 */
+	AlphaSession newSession(ASPCore2Program program);
+
+	/**
 	 * Reifies, i.e. re-expresses as a set of ASP facts, the given input program.
 	 * 
 	 * @param program an ASP program to reify

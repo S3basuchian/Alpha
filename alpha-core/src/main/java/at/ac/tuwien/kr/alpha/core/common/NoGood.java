@@ -35,6 +35,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.stream.IntStream;
 
+import static at.ac.tuwien.kr.alpha.core.common.NoGoodInterface.Type.ENUMERATION;
 import static at.ac.tuwien.kr.alpha.core.common.NoGoodInterface.Type.INTERNAL;
 import static at.ac.tuwien.kr.alpha.core.common.NoGoodInterface.Type.LEARNT;
 import static at.ac.tuwien.kr.alpha.core.common.NoGoodInterface.Type.STATIC;
@@ -91,6 +92,10 @@ public class NoGood implements NoGoodInterface, Comparable<NoGood> {
 	
 	public static NoGood learnt(int... literals) {
 		return new NoGood(LEARNT, literals);
+	}
+
+	public static NoGood enumeration(int... literals) {
+		return new NoGood(ENUMERATION, literals);
 	}
 
 	public static NoGood headFirst(int... literals) {
@@ -165,6 +170,11 @@ public class NoGood implements NoGoodInterface, Comparable<NoGood> {
 			}
 
 			@Override
+			public boolean fromEnumeration() {
+				return NoGood.this.type == ENUMERATION;
+			}
+
+			@Override
 			public String toString() {
 				return NoGood.this + "(unwatched)";
 			}
@@ -173,6 +183,16 @@ public class NoGood implements NoGoodInterface, Comparable<NoGood> {
 
 	public NoGood withoutHead() {
 		return new NoGood(type, literals.clone());
+	}
+
+	/**
+	 * Returns a copy of this NoGood tagged as {@link Type#ENUMERATION}. Used to re-classify a learned
+	 * nogood whose derivation may have resolved through an enumeration nogood: such a resolvent is sound
+	 * only for the answer-set-blocked program, so it must be purged together with the enumeration nogoods
+	 * at the next shot boundary instead of persisting (unsoundly) in the learned-nogood store.
+	 */
+	public NoGood asEnumeration() {
+		return new NoGood(ENUMERATION, literals.clone());
 	}
 
 	/**

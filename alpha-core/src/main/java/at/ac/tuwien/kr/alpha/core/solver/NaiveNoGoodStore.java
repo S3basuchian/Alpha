@@ -143,6 +143,17 @@ public class NaiveNoGoodStore implements NoGoodStore {
 	public void cleanupLearnedNoGoods() {
 	}
 
+	@Override
+	public void purgeEnumerationNoGoods() {
+		// NaiveNoGoodStore is a debug/benchmarking store and does not separately track enumeration
+		// nogoods. Session-mode multi-shot solving with enumeration is only correct with the default
+		// NoGoodStoreAlphaRoaming. Refuse rather than silently leave stale enumeration nogoods in the
+		// store, which would invalidly block valid answer sets in subsequent shots.
+		throw new UnsupportedOperationException(
+				"NaiveNoGoodStore does not support inter-shot enumeration-nogood purging. "
+						+ "Use NoGoodStoreAlphaRoaming (the default) for AlphaSession.");
+	}
+
 	/**
 	 * Infer an assignment from a nogood if it is weakly unit.
 	 *

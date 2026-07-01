@@ -39,6 +39,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 
+import static at.ac.tuwien.kr.alpha.core.programs.atoms.Literals.atomToLiteral;
 import static at.ac.tuwien.kr.alpha.core.solver.ThriceTruth.FALSE;
 import static at.ac.tuwien.kr.alpha.core.solver.ThriceTruth.MBT;
 import static at.ac.tuwien.kr.alpha.core.solver.ThriceTruth.TRUE;
@@ -244,6 +245,156 @@ public class TrailAssignmentTest {
 		assignment.backtrack();
 
 		assertEquals(0, assignment.getMBTCount());
+	}
+
+	@Test
+	public void unassignManyAtDecisionLevelZero_emptyAndNullAreNoOps() {
+		assignment.assign(1, FALSE);
+		assignment.assign(2, TRUE);
+		assignment.unassignManyAtDecisionLevelZero(Collections.emptyList());
+		assertEquals(FALSE, assignment.getTruth(1));
+		assertEquals(TRUE, assignment.getTruth(2));
+		assignment.unassignManyAtDecisionLevelZero(null);
+		assertEquals(FALSE, assignment.getTruth(1));
+		assertEquals(TRUE, assignment.getTruth(2));
+	}
+
+	@Test
+	public void unassignManyAtDecisionLevelZero_clearsSpecifiedAtoms() {
+		assignment.assign(1, FALSE);
+		assignment.assign(2, TRUE);
+		assignment.assign(3, FALSE);
+		assignment.unassignManyAtDecisionLevelZero(Arrays.asList(1, 3));
+		assertFalse(assignment.isAssigned(1));
+		assertEquals(TRUE, assignment.getTruth(2));
+		assertFalse(assignment.isAssigned(3));
+	}
+
+	@Test
+	public void unassignManyAtDecisionLevelZero_handlesDuplicateInput() {
+		assignment.assign(1, MBT);  // mbtCount = 1
+		assertEquals(1, assignment.getMBTCount());
+		assignment.unassignManyAtDecisionLevelZero(Arrays.asList(1, 1, 1));
+		assertFalse(assignment.isAssigned(1));
+		// mbtCount must drop exactly once even though atom 1 appears three times in the input.
+		assertEquals(0, assignment.getMBTCount());
+	}
+
+	@Test
+	public void unassignManyAtDecisionLevelZero_skipsHigherDecisionLevels() {
+		assignment.assign(1, FALSE);  // dl 0
+		assignment.choose(2, MBT);    // dl 1
+		// Atom 2 is at dl 1; must be left alone.
+		assignment.unassignManyAtDecisionLevelZero(Arrays.asList(1, 2));
+		assertFalse(assignment.isAssigned(1));
+		assertEquals(MBT, assignment.getTruth(2));
+	}
+
+	@Test
+	public void unassignManyAtDecisionLevelZero_skipsUnassignedAtoms() {
+		assignment.assign(1, FALSE);
+		// Atom 5 is never assigned.
+		assignment.unassignManyAtDecisionLevelZero(Arrays.asList(1, 5));
+		assertFalse(assignment.isAssigned(1));
+		assertFalse(assignment.isAssigned(5));
+	}
+
+	@Test
+	public void unassignManyAtDecisionLevelZero_handlesMbtToTrueUpgradeTrailEntries() {
+		// Atom 1 goes MBT then TRUE: it occupies two trail slots; both must be removed.
+		assignment.assign(1, MBT);
+		assignment.assign(1, TRUE);
+		assignment.assign(2, FALSE);
+		assertEquals(TRUE, assignment.getTruth(1));
+		// trailSize before: 3 (MBT, TRUE upgrade, FALSE).
+		assignment.unassignManyAtDecisionLevelZero(Collections.singletonList(1));
+		assertFalse(assignment.isAssigned(1));
+		assertEquals(FALSE, assignment.getTruth(2));
+		// Iterators still walk a coherent trail.
+		IntIterator it = assignment.getNewPositiveAssignmentsIterator();
+		// Only positive (TRUE/MBT) assignments. After the un-assign, atom 2 is FALSE.
+		// So no positive assignment should remain.
+		assertFalse(it.hasNext());
+	}
+
+	@Test
+	public void unassignWithDependents_seedsViaAntecedentPredicate() {
+		// Simulate: atom 1 is forced TRUE at dl 0 by a structural fact (no antecedent).
+		// Then a "non-unary enum nogood" propagates atom 2 = FALSE at dl 0, with that
+		// nogood as antecedent. Its reason literal is atom 1, which is NOT a seed atom.
+		// The reason-atom cascade alone would never reach atom 2; the antecedent predicate must.
+		Antecedent purgedNoGood = new Antecedent() {
+			private final int[] reasons = { atomToLiteral(1, true), atomToLiteral(2, false) };
+
+			@Override
+			public int[] getReasonLiterals() {
+				return reasons;
+			}
+
+			@Override
+			public void bumpActivity() {
+			}
+
+			@Override
+			public void decreaseActivity() {
+			}
+		};
+		assignment.assign(1, TRUE);                                // structural fact, no antecedent
+		assignment.assign(2, FALSE, purgedNoGood, 0);              // propagation by the soon-to-be-purged nogood
+
+		// No explicit seed atoms; the predicate alone must drive the un-assignment.
+		assignment.unassignAtDecisionLevelZeroWithDependents(Collections.emptyList(),
+				(atom, ant) -> ant == purgedNoGood);
+
+		assertFalse(assignment.isAssigned(2));
+		assertEquals(TRUE, assignment.getTruth(1));                // untouched: predicate didn't match
+	}
+
+	@Test
+	public void unassignWithDependents_antecedentPredicateCascades() {
+		// atom 1 forced FALSE at dl 0 by a "purged" nogood; atom 2 then derived at dl 0
+		// from atom 1 via a different (structural) nogood. The cascade must reach atom 2
+		// from the predicate-seeded atom 1 via the reason-atom chain.
+		Antecedent purgedNoGood = new Antecedent() {
+			private final int[] reasons = { atomToLiteral(1, true) };
+
+			@Override
+			public int[] getReasonLiterals() {
+				return reasons;
+			}
+
+			@Override
+			public void bumpActivity() {
+			}
+
+			@Override
+			public void decreaseActivity() {
+			}
+		};
+		Antecedent structural = new Antecedent() {
+			private final int[] reasons = { atomToLiteral(1, false), atomToLiteral(2, false) };
+
+			@Override
+			public int[] getReasonLiterals() {
+				return reasons;
+			}
+
+			@Override
+			public void bumpActivity() {
+			}
+
+			@Override
+			public void decreaseActivity() {
+			}
+		};
+		assignment.assign(1, FALSE, purgedNoGood, 0);
+		assignment.assign(2, FALSE, structural, 0);
+
+		assignment.unassignAtDecisionLevelZeroWithDependents(Collections.emptyList(),
+				(atom, ant) -> ant == purgedNoGood);
+
+		assertFalse(assignment.isAssigned(1));
+		assertFalse(assignment.isAssigned(2));                     // reached via the cascade
 	}
 
 	@Test

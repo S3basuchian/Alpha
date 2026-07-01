@@ -36,6 +36,7 @@ import static at.ac.tuwien.kr.alpha.core.solver.heuristics.BranchingHeuristic.DE
 import static at.ac.tuwien.kr.alpha.core.solver.learning.GroundConflictNoGoodLearner.ConflictAnalysisResult.UNSAT;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -99,6 +100,13 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 		boolean afterAllAtomsAssigned;
 	}
 	private final SearchState searchState = new SearchState();
+
+	/**
+	 * Set to {@code true} when {@link #prepareForSubsequentAnswerSet()} added an enumeration nogood to the
+	 * store. {@link #resetForNewShot()} reads this to decide whether to invoke
+	 * {@link NoGoodStore#purgeEnumerationNoGoods()} during reset. Cleared again at the end of reset.
+	 */
+	private boolean enumerationUsed = false;
 
 	private final PerformanceLog performanceLog;
 	
@@ -170,8 +178,77 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 		searchState.hasBeenInitialized = true;
 	}
 
+	/**
+	 * Resets this solver for a fresh enumeration on (potentially extended) program state. Preserves the
+	 * {@link NoGoodStore}'s structural and learned nogoods plus the branching heuristic's activity scores,
+	 * and the atom-store / grounder coupling.  Discards the choice stack and the {@code dl &gt; 0}
+	 * portion of the assignment by backjumping to decision level 0; if the previous shot added
+	 * enumeration nogoods to the store, those are purged via
+	 * {@link NoGoodStore#purgeEnumerationNoGoods()} (which also un-assigns any literals a unary
+	 * enumeration nogood forced at dl 0).  The search-state flags are reset so the next call to
+	 * {@link #tryAdvance} runs {@link #initializeSearch()} again — which pulls any newly-derived nogoods
+	 * from the grounder and ingests them into the existing store.
+	 *
+	 * <p>Only monotone (add-only) shots reach this reset. Retraction shots go through
+	 * {@link #retractInPlace(Collection)} instead, which additionally clears the trail and drops learned
+	 * nogoods. Learned nogoods and VSIDS are always preserved here.
+	 */
+	public void resetForNewShot() {
+		if (assignment.getDecisionLevel() > 0) {
+			choiceManager.backjump(0);
+		}
+		// Closing assignments (atoms forced FALSE by `close()` during the previous shot) are tied to that
+		// shot's answer set. They must go before a new shot starts, otherwise newly-added rules/facts
+		// that derive a closed atom TRUE would conflict at dl 0 and the search would terminate UNSAT.
+		assignment.unassignClosingAssignmentsAtDecisionLevelZero();
+		if (enumerationUsed) {
+			store.purgeEnumerationNoGoods();
+			enumerationUsed = false;
+		}
+		searchState.hasBeenInitialized = false;
+		searchState.isSearchSpaceCompletelyExplored = false;
+		searchState.afterAllAtomsAssigned = false;
+	}
+
+	/**
+	 * Resets this solver for a fresh shot after a fact retraction, <em>keeping the live solver and its
+	 * entire nogood store</em> (structural nogoods and their watches are untouched — no re-ingest). The
+	 * caller has already pruned the grounder's cumulative unit nogoods; the surviving fact/structural
+	 * units are passed in here.
+	 *
+	 * <p>Steps: (1) backjump to dl 0 and purge the previous shot's enumeration nogoods; (2)
+	 * {@link WritableAssignment#clear() clear the whole trail} — every literal becomes unassigned, so every
+	 * ordinary two-watched-literal watch is trivially valid and the kept structural nogoods stay sound;
+	 * (3) {@link NoGoodStore#dropAllLearnedNoGoods() drop all learned nogoods} (any may be unsound in the
+	 * reduced program — the sound conservative choice, no provenance needed); (4) re-register the choice
+	 * callbacks that {@code clear()} wiped; (5) {@link NoGoodStore#reassertUnits(Collection) re-force the
+	 * surviving units} at dl 0, which re-triggers propagation of their structural consequences on the next
+	 * solve. VSIDS is preserved for free (this is the same solver object).
+	 */
+	public void retractInPlace(Collection<NoGood> survivingUnits) {
+		if (assignment.getDecisionLevel() > 0) {
+			choiceManager.backjump(0);
+		}
+		// Detach the previous shot's enumeration nogoods while the trail is still populated.
+		if (enumerationUsed) {
+			store.purgeEnumerationNoGoods();
+			enumerationUsed = false;
+		}
+		// Clear the whole trail (also wipes per-atom change callbacks, re-registered by choiceManager.reset).
+		assignment.clear();
+		// Drop all learned nogoods — the assignment is already clear, so this only detaches watches/counters.
+		store.dropAllLearnedNoGoods();
+		choiceManager.reset();
+		// Re-force the surviving units at dl 0; propagation of their consequences runs on the next solve.
+		store.reassertUnits(survivingUnits);
+		searchState.hasBeenInitialized = false;
+		searchState.isSearchSpaceCompletelyExplored = false;
+		searchState.afterAllAtomsAssigned = false;
+	}
+
 	private void prepareForSubsequentAnswerSet() {
 		// We already found one Answer-Set and are requested to find another one.
+		enumerationUsed = true;
 		searchState.afterAllAtomsAssigned = false;
 		if (assignment.getDecisionLevel() == 0) {
 			// Solver is at decision level 0 again after finding some answer-set
@@ -293,7 +370,13 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 		}
 
 		choiceManager.backjump(analysisResult.backjumpLevel);
-		final NoGood learnedNoGood = analysisResult.learnedNoGood;
+		NoGood learnedNoGood = analysisResult.learnedNoGood;
+		if (analysisResult.enumerationDerived) {
+			// Conflict analysis resolved through an enumeration nogood, so this resolvent is sound only for
+			// the answer-set-blocked program. Register it as enumeration-scoped so it is purged with N_e at
+			// the shot boundary instead of persisting unsoundly in the learned-nogood store across shots.
+			learnedNoGood = learnedNoGood.asEnumeration();
+		}
 		int noGoodId = grounder.register(learnedNoGood);
 		return addAndBackjumpIfNecessary(noGoodId, learnedNoGood, analysisResult.lbd);
 	}

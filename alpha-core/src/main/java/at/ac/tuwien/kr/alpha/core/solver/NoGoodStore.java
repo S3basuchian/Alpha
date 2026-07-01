@@ -1,5 +1,7 @@
 package at.ac.tuwien.kr.alpha.core.solver;
 
+import java.util.Collection;
+
 import at.ac.tuwien.kr.alpha.core.common.NoGood;
 
 /**
@@ -53,6 +55,44 @@ public interface NoGoodStore {
 	 * necessary.
 	 */
 	void cleanupLearnedNoGoods();
+
+	/**
+	 * Drops every nogood of {@link at.ac.tuwien.kr.alpha.core.common.NoGoodInterface.Type#ENUMERATION} from the
+	 * store: removes them from watch lists, undoes any decision-level-0 assignments they forced, and resets
+	 * the type/cardinality counters. Structural and learned nogoods are untouched.
+	 *
+	 * <p>Intended use is {@code DefaultSolver.resetForNewShot(Iterable)} in a {@code AlphaSession}: between shots,
+	 * the session must purge enumeration nogoods because they are only valid for the program at the time
+	 * the previous shot's answer set was found and would invalidly block valid answer sets of the
+	 * (potentially extended) program of the next shot.
+	 *
+	 * <p>Pre: caller has already backjumped to decision level 0 — this method only handles the dl-0
+	 * residue (unary enumeration nogoods that forced a literal at dl 0). It is a no-op if no enumeration
+	 * nogoods are recorded.
+	 */
+	void purgeEnumerationNoGoods();
+
+	/**
+	 * Drops every learned nogood from the store (used by the in-place fact-retraction path). A learned
+	 * nogood whose derivation depended on a now-retracted fact may be unsound in the reduced program, so
+	 * all learning is discarded — the sound, conservative choice that needs no provenance tracking.
+	 *
+	 * <p>Pre: caller has already cleared the assignment (so learned unaries' dl-0 propagations are gone);
+	 * this method only detaches watches and resets counters. Default is a no-op for stores that do not
+	 * support incremental learned-nogood removal.
+	 */
+	default void dropAllLearnedNoGoods() {
+		throw new UnsupportedOperationException("This NoGoodStore does not support dropAllLearnedNoGoods.");
+	}
+
+	/**
+	 * Re-asserts the given unit (size-1) nogoods at decision level 0. Used by the in-place retraction path
+	 * after clearing the assignment, to re-force the surviving facts and thereby re-trigger propagation of
+	 * their structural consequences.
+	 */
+	default void reassertUnits(Collection<NoGood> units) {
+		throw new UnsupportedOperationException("This NoGoodStore does not support reassertUnits.");
+	}
 
 	NoGoodCounter getNoGoodCounter();
 }

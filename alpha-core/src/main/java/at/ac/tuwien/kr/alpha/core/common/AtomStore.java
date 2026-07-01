@@ -83,6 +83,27 @@ public interface AtomStore {
 	 */
 	boolean contains(Atom groundAtom);
 
+	/**
+	 * Remove the given atom id from the store: its slot becomes null and {@link #contains} returns
+	 * false for the previously-stored atom. The id is not re-used (allocations remain monotone), but
+	 * the atom→id reverse map entry is cleared so a subsequent {@link #putIfAbsent} for the same
+	 * structural atom allocates a fresh id.
+	 *
+	 * <p>Used by the session-mode retraction GC path: when a fact is retracted and its dependent
+	 * ground rules become unfireable, the corresponding body atoms (β) are removed so that
+	 * re-grounding upon re-addition produces new ids and new nogoods through the normal pipeline
+	 * (avoiding the "already grounded, skip" short-circuit in {@code NoGoodGenerator}).
+	 *
+	 * <p>Callers must guarantee that no live solver references the removed id — in the session-mode
+	 * retraction path this is enforced by falling back to a fresh-solver rebuild whenever the GC
+	 * physically removes atoms from the store.
+	 *
+	 * @param atomId the id to release; no-op if the id is not currently bound
+	 */
+	default void removeAtom(int atomId) {
+		throw new UnsupportedOperationException("removeAtom not supported by this AtomStore implementation");
+	}
+
 	String atomToString(int atom);
 
 	default String literalToString(int literal) {

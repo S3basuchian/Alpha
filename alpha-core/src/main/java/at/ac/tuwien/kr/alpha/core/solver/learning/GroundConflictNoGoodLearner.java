@@ -104,12 +104,18 @@ public class GroundConflictNoGoodLearner {
 		public final int backjumpLevel;
 		public final Collection<Integer> resolutionAtoms;
 		public final int lbd;
+		/**
+		 * True if conflict analysis resolved through an enumeration nogood, so the learned nogood is sound only
+		 * for the answer-set-blocked program and must not be retained across shots.
+		 */
+		public final boolean enumerationDerived;
 
 		private ConflictAnalysisResult() {
 			learnedNoGood = null;
 			backjumpLevel = -1;
 			resolutionAtoms = null;
 			lbd = LBD_NO_VALUE;
+			enumerationDerived = false;
 		}
 
 		public ConflictAnalysisResult(NoGood learnedNoGood, int backjumpLevel, Collection<Integer> resolutionAtoms) {
@@ -117,6 +123,10 @@ public class GroundConflictNoGoodLearner {
 		}
 
 		public ConflictAnalysisResult(NoGood learnedNoGood, int backjumpLevel, Collection<Integer> resolutionAtoms, int lbd) {
+			this(learnedNoGood, backjumpLevel, resolutionAtoms, lbd, false);
+		}
+
+		public ConflictAnalysisResult(NoGood learnedNoGood, int backjumpLevel, Collection<Integer> resolutionAtoms, int lbd, boolean enumerationDerived) {
 			if (backjumpLevel < 0) {
 				throw oops("Backjumping level is smaller than 0");
 			}
@@ -125,6 +135,7 @@ public class GroundConflictNoGoodLearner {
 			this.backjumpLevel = backjumpLevel;
 			this.resolutionAtoms = resolutionAtoms;
 			this.lbd = lbd;
+			this.enumerationDerived = enumerationDerived;
 		}
 
 		@Override
@@ -198,6 +209,10 @@ public class GroundConflictNoGoodLearner {
 		Set<Integer> processedAtoms = new HashSet<>();	// Since trail contains 2 entries for MBT->TRUE assigned atoms, explicitly record which seen atoms have ben processed to avoid processing seen atoms twice.
 		int[] currentConflictReason = conflictReason.getReasonLiterals();
 		int backjumpLevel = -1;
+		// Track whether any nogood resolved through (the conflicting one, or any antecedent expanded at the
+		// current decision level below) is an enumeration nogood. If so, the learned resolvent is sound only
+		// for the answer-set-blocked program and must be registered as enumeration-scoped by the caller.
+		boolean enumerationDerived = conflictReason.fromEnumeration();
 		conflictReason.bumpActivity();
 		TrailAssignment.TrailBackwardsWalker trailWalker = ((TrailAssignment)assignment).getTrailBackwardsWalker();
 		if (LOGGER.isTraceEnabled()) {
@@ -242,6 +257,7 @@ public class GroundConflictNoGoodLearner {
 			Antecedent impliedBy = assignment.getImpliedBy(nextAtom);
 			if (impliedBy != null) {
 				currentConflictReason = impliedBy.getReasonLiterals();
+				enumerationDerived |= impliedBy.fromEnumeration();
 				impliedBy.bumpActivity();
 			}
 			processedAtoms.add(nextAtom);
@@ -267,7 +283,7 @@ public class GroundConflictNoGoodLearner {
 		if (LOGGER.isTraceEnabled()) {
 			LOGGER.trace("Backjumping decision level: {}", backjumpingDecisionLevel);
 		}
-		return new ConflictAnalysisResult(learnedNoGood, backjumpingDecisionLevel, resolutionAtoms, computeLBD(learnedLiterals));
+		return new ConflictAnalysisResult(learnedNoGood, backjumpingDecisionLevel, resolutionAtoms, computeLBD(learnedLiterals), enumerationDerived);
 	}
 
 	private int[] minimizeLearnedLiterals(List<Integer> resolutionLiterals, Set<Integer> seenAtoms) {

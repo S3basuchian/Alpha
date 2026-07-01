@@ -163,6 +163,20 @@ public class IndexedInstanceStorage {
 	}
 
 	/**
+	 * Re-marks the given instances as recently-added, so they are reconsidered during the next
+	 * grounding pass. Only instances already present in this storage are re-marked; unknown ones
+	 * are ignored. Used to wake up a fresh solver to re-derive ground rules that depend on
+	 * solver-assigned (but already-stored) atoms after a previous solver session.
+	 */
+	public void reMarkAsRecentlyAdded(Iterable<Instance> toReMark) {
+		for (Instance instance : toReMark) {
+			if (instances.contains(instance) && !recentlyAddedInstances.contains(instance)) {
+				recentlyAddedInstances.add(instance);
+			}
+		}
+	}
+
+	/**
 	 * Returns a list of all instances having the given term at the given position. Returns null if no such
 	 * instances exist.
 	 * 
