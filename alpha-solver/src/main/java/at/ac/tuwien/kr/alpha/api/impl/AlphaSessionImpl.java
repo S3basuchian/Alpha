@@ -214,7 +214,15 @@ public final class AlphaSessionImpl implements AlphaSession {
 			applyPendingRetractions();
 		}
 		final boolean filterChanged = lastFilter != null && lastFilter != filter;
-		final boolean grounderUsable = atomStore != null && !filterChanged;
+		// A previous shot that ended in a decision-level-0 conflict (UNSAT proven at the root) leaves the live
+		// solver + grounder in a state the warm resets cannot soundly repair: there is no consistent dl-0
+		// fixpoint to return to, and the lazy grounder may have short-circuited before grounding all reachable
+		// instances. Reusing it yields spurious answer sets (re-solve/add) or missing derivations (retract), so
+		// force a full rebuild instead. Search-exhausted UNSAT (a consistent dl-0 fixpoint existed) is handled
+		// correctly by the warm resets and does not set this flag.
+		final boolean priorShotEndedInDl0Conflict = liveSolver instanceof DefaultSolver
+				&& ((DefaultSolver) liveSolver).hasEndedInDecisionLevelZeroConflict();
+		final boolean grounderUsable = atomStore != null && !filterChanged && !priorShotEndedInDl0Conflict;
 
 		Solver solver;
 		if (!grounderUsable) {

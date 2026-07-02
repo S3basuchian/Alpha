@@ -265,7 +265,10 @@ public class GroundConflictNoGoodLearner {
 		// Add the 1UIP literal.
 		resolutionLiterals.add(atomToLiteral(nextAtom, assignment.getTruth(nextAtom).toBoolean()));
 
-		int[] learnedLiterals = minimizeLearnedLiterals(resolutionLiterals, seenAtoms);
+		MinimizationResult minimization = minimizeLearnedLiterals(resolutionLiterals, seenAtoms);
+		int[] learnedLiterals = minimization.literals;
+		// Minimization may have resolved through an enumeration nogood the 1UIP walk never visited.
+		enumerationDerived |= minimization.enumerationDerived;
 
 		NoGood learnedNoGood = NoGood.learnt(learnedLiterals);
 		if (LOGGER.isTraceEnabled()) {
@@ -286,17 +289,44 @@ public class GroundConflictNoGoodLearner {
 		return new ConflictAnalysisResult(learnedNoGood, backjumpingDecisionLevel, resolutionAtoms, computeLBD(learnedLiterals), enumerationDerived);
 	}
 
-	private int[] minimizeLearnedLiterals(List<Integer> resolutionLiterals, Set<Integer> seenAtoms) {
+	/**
+	 * Result of local clause minimization: the surviving literals, and whether any literal was resolved away
+	 * through an enumeration(-scoped) nogood. The latter taints the whole learned nogood — it is then an
+	 * implicate of {@code N_s ∪ N_ℓ ∪ N_e}, not of {@code N_s ∪ N_ℓ}, and must be enumeration-scoped so it is
+	 * purged with the enumeration nogoods at the shot boundary rather than persisting unsoundly.
+	 */
+	private static final class MinimizationResult {
+		final int[] literals;
+		final boolean enumerationDerived;
+
+		MinimizationResult(int[] literals, boolean enumerationDerived) {
+			this.literals = literals;
+			this.enumerationDerived = enumerationDerived;
+		}
+	}
+
+	private MinimizationResult minimizeLearnedLiterals(List<Integer> resolutionLiterals, Set<Integer> seenAtoms) {
 		int[] learnedLiterals = new int[resolutionLiterals.size()];
 		int i = 0;
+		// Removing a literal here is an extra resolution step through the nogood that implied it. If that
+		// nogood is enumeration-scoped, the minimized resolvent inherits the enumeration taint just as the
+		// 1UIP walk's resolutions do — otherwise a nogood that only became enumeration-derived via
+		// minimization would survive the shot-boundary purge tagged LEARNT and unsoundly block a valid answer
+		// set in a later shot. Tracked here (the 1UIP walk cannot see it: it never visits these lower-level
+		// literals' antecedents).
+		boolean enumerationDerived = false;
 		// Do local clause minimization: if an implied literal has all its antecedents seen (i.e., in the clause already), it can be removed.
 		learnedLiteralsLoop:
 		for (Integer resolutionLiteral : resolutionLiterals) {
+			Antecedent antecedent = assignment.getImpliedBy(atomOf(resolutionLiteral));
 			if (assignment.getWeakDecisionLevel(atomOf(resolutionLiteral)) == 0) {
-				// Skip literals from decision level 0.
+				// Skip literals from decision level 0. Dropping such a literal resolves it away through the
+				// nogood that forced it at the root; if that is enumeration-scoped, the resolvent is tainted.
+				if (antecedent != null && antecedent.fromEnumeration()) {
+					enumerationDerived = true;
+				}
 				continue;
 			}
-			Antecedent antecedent = assignment.getImpliedBy(atomOf(resolutionLiteral));
 			if (antecedent == null) {
 				// The resolutionLiteral is a decision, keep it.
 				learnedLiterals[i++] = resolutionLiteral;
@@ -308,13 +338,18 @@ public class GroundConflictNoGoodLearner {
 						continue learnedLiteralsLoop;
 					}
 				}
+				// Self-subsumption: resolutionLiteral is removed by resolving through its antecedent. An
+				// enumeration-scoped antecedent taints the resolvent.
+				if (antecedent.fromEnumeration()) {
+					enumerationDerived = true;
+				}
 			}
 		}
 		// Shrink array if we did not copy over all literals from resolutionLiterals.
 		if (i < resolutionLiterals.size()) {
 			learnedLiterals = Arrays.copyOf(learnedLiterals, i);
 		}
-		return learnedLiterals;
+		return new MinimizationResult(learnedLiterals, enumerationDerived);
 	}
 
 	private int computeLBD(int[] literals) {

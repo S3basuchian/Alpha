@@ -115,6 +115,26 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 	// first answer set of a shot is produced (and stays null for a shot that finds none).
 	private Map<Integer, ThriceTruth> dl0Snapshot;
 
+	/**
+	 * Set to {@code true} when this shot's search terminated in a conflict at decision level 0 — an UNSAT
+	 * proven at the root (an empty nogood, or conflict analysis that resolved to dl 0). Such a shot leaves no
+	 * consistent dl-0 fixpoint and may have short-circuited grounding, so the incremental resets
+	 * ({@link #resetForNewShot()} / {@link #retractInPlace(Collection)}) cannot soundly repair it and the
+	 * session must rebuild from scratch before the next shot. Contrast search-exhausted UNSAT (conflict only
+	 * after choices, over a consistent dl-0 fixpoint), which the warm resets handle correctly. Reset at each
+	 * shot start; read by the session via {@link #hasEndedInDecisionLevelZeroConflict()}.
+	 */
+	private boolean endedInDecisionLevelZeroConflict = false;
+
+	/**
+	 * @return whether the last shot ended in a decision-level-0 conflict (see
+	 *         {@link #endedInDecisionLevelZeroConflict}). The session uses this to force a full rebuild
+	 *         instead of a warm reset before the next shot.
+	 */
+	public boolean hasEndedInDecisionLevelZeroConflict() {
+		return endedInDecisionLevelZeroConflict;
+	}
+
 	private final PerformanceLog performanceLog;
 	
 	public DefaultSolver(AtomStore atomStore, Grounder grounder, NoGoodStore store, WritableAssignment assignment, Random random, SystemConfig config, HeuristicsConfiguration heuristicsConfiguration) {
@@ -204,6 +224,7 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 	 * nogoods. Learned nogoods and VSIDS are always preserved here.
 	 */
 	public void resetForNewShot() {
+		endedInDecisionLevelZeroConflict = false;
 		if (assignment.getDecisionLevel() > 0) {
 			choiceManager.backjump(0);
 		}
@@ -245,6 +266,7 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 	 * solve. VSIDS is preserved for free (this is the same solver object).
 	 */
 	public void retractInPlace(Collection<NoGood> survivingUnits) {
+		endedInDecisionLevelZeroConflict = false;
 		if (assignment.getDecisionLevel() > 0) {
 			choiceManager.backjump(0);
 		}
@@ -388,7 +410,9 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 
 		LOGGER.debug("Analysis result: {}", analysisResult);
 		if (analysisResult == UNSAT) {
-			// Halt if unsatisfiable.
+			// Halt if unsatisfiable. Terminal conflict is at decision level 0 (analyzeConflict returns UNSAT
+			// only then), so the session must rebuild rather than warm-reset before the next shot.
+			endedInDecisionLevelZeroConflict = true;
 			return false;
 		}
 
@@ -581,7 +605,8 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 		Map.Entry<Integer, NoGood> entry;
 		while ((entry = noGoodsToAdd.poll()) != null) {
 			if (NoGood.UNSAT.equals(entry.getValue())) {
-				// Empty NoGood cannot be satisfied, program is unsatisfiable.
+				// Empty NoGood cannot be satisfied, program is unsatisfiable (unconditionally, i.e. at dl 0).
+				endedInDecisionLevelZeroConflict = true;
 				return false;
 			}
 
@@ -605,6 +630,9 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 
 		GroundConflictNoGoodLearner.ConflictAnalysisResult conflictAnalysisResult = learner.analyzeConflictFromAddingNoGood(conflictCause.getAntecedent());
 		if (conflictAnalysisResult == UNSAT) {
+			// Adding a nogood contradicted the decision-level-0 assignment (e.g. a fact/constraint conflicting
+			// at the root). Mark the shot so the session rebuilds rather than warm-resets before the next.
+			endedInDecisionLevelZeroConflict = true;
 			return false;
 		}
 		branchingHeuristic.analyzedConflict(conflictAnalysisResult);

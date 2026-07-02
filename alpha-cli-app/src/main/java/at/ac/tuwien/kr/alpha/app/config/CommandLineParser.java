@@ -132,7 +132,7 @@ public class CommandLineParser {
 			.desc("Disable stratified evaluation")
 			.build();
 	private static final Option OPT_NO_NOGOOD_DELETION = Option.builder("dnd").longOpt("disableNoGoodDeletion")
-			.desc("disable the deletion of (learned, little active) nogoods (default: " 
+			.desc("disable the deletion of (learned, little active) nogoods (default: "
 					+ SystemConfig.DEFAULT_DISABLE_NOGOOD_DELETION + ")")
 			.build();
 	private static final Option OPT_GROUNDER_TOLERANCE_CONSTRAINTS = Option.builder("gtc").longOpt("grounderToleranceConstraints")
