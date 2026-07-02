@@ -79,100 +79,32 @@ tasks.register<JavaExec>("runIncrementalExample") {
 	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalSolvingExample")
 }
 
-tasks.register<JavaExec>("runIncrementalCutedgeBenchmark") {
-	group = "examples"
-	description = "Run the incremental cutedge benchmark using AlphaSession."
-	classpath = sourceSets["main"].runtimeClasspath
-	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalCutedgeBenchmark")
-}
-
-tasks.register<JavaExec>("runIncrementalCutedgeRetractionBenchmark") {
-	group = "examples"
-	description = "Cutedge iterative edge-cutting benchmark: solve, retract the AS-chosen edge, re-solve (session vs batch)."
-	classpath = sourceSets["main"].runtimeClasspath
-	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalCutedgeRetractionBenchmark")
-}
-
-tasks.register<JavaExec>("runIncrementalHanoiBenchmark") {
-	group = "examples"
-	description = "Run the iterative-deepening Hanoi benchmark using AlphaSession."
-	classpath = sourceSets["main"].runtimeClasspath
-	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalHanoiBenchmark")
-}
-
-tasks.register<JavaExec>("runIncrementalReachBenchmark") {
-	group = "examples"
-	description = "Run the incremental reach benchmark using AlphaSession."
-	classpath = sourceSets["main"].runtimeClasspath
-	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalReachBenchmark")
-}
-
-tasks.register<JavaExec>("runIncrementalReachRetractionBenchmark") {
-	group = "examples"
-	description = "Run the reach benchmark with sliding-window retraction (session vs batch baseline)."
-	classpath = sourceSets["main"].runtimeClasspath
-	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalReachRetractionBenchmark")
-}
-
-tasks.register<JavaExec>("runIncrementalSameGenBenchmark") {
-	group = "examples"
-	description = "Run the incremental same-generation benchmark using AlphaSession."
-	classpath = sourceSets["main"].runtimeClasspath
-	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalSameGenBenchmark")
-}
-
-tasks.register<JavaExec>("runIncrementalRdfsBenchmark") {
-	group = "examples"
-	description = "Run the incremental RDFS subclass + type benchmark using AlphaSession."
-	classpath = sourceSets["main"].runtimeClasspath
-	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalRdfsBenchmark")
-}
-
-tasks.register<JavaExec>("runIncrementalRdfsRetractionBenchmark") {
-	group = "examples"
-	description = "RDFS benchmark with sliding-window fact retraction (session vs batch)."
-	classpath = sourceSets["main"].runtimeClasspath
-	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalRdfsRetractionBenchmark")
-}
-
-tasks.register<JavaExec>("runIncrementalLocstratBenchmark") {
-	group = "examples"
-	description = "Run the incremental locstrat benchmark using AlphaSession."
-	classpath = sourceSets["main"].runtimeClasspath
-	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalLocstratBenchmark")
-}
-
-tasks.register<JavaExec>("runIncrementalGroundExplosionBenchmark") {
-	group = "examples"
-	description = "Run the incremental Ground Explosion benchmark using AlphaSession."
-	classpath = sourceSets["main"].runtimeClasspath
-	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalGroundExplosionBenchmark")
-}
-
-tasks.register<JavaExec>("runIncrementalGroundExplosionRetractionBenchmark") {
-	group = "examples"
-	description = "Ground-explosion benchmark with sliding-window dom retraction (session vs batch)."
-	classpath = sourceSets["main"].runtimeClasspath
-	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalGroundExplosionRetractionBenchmark")
-}
+// The incremental benchmark suite — exactly four drivers (see examples/*/README.md).
 
 tasks.register<JavaExec>("runIncrementalGroundExplosionConstraintBenchmark") {
 	group = "examples"
-	description = "Ground-explosion benchmark with a fixed dom universe and streamed forbidding constraints (session vs batch)."
+	description = "Benchmark #1: ground-explosion with a fixed dom universe and streamed forbidding constraints (live vs batch)."
 	classpath = sourceSets["main"].runtimeClasspath
 	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalGroundExplosionConstraintBenchmark")
 }
 
-tasks.register<JavaExec>("runIncrementalColoringConstraintBenchmark") {
+tasks.register<JavaExec>("runIncrementalCutedgeRetractionBenchmark") {
 	group = "examples"
-	description = "Incremental 5-colorability with streamed colour-exclusion constraints (live vs batch); search-hard feasibility probe."
+	description = "Benchmark #2: cutedge iterative edge-cutting — solve, retract the AS-chosen edge, re-solve (live vs batch)."
 	classpath = sourceSets["main"].runtimeClasspath
-	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalColoringConstraintBenchmark")
+	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalCutedgeRetractionBenchmark")
 }
 
-tasks.register<JavaExec>("runIncrementalColoringGrowthBenchmark") {
+tasks.register<JavaExec>("runIncrementalReachBenchmark") {
 	group = "examples"
-	description = "Incremental 5-colorability under graph growth (+1 pendant vertex/edge per shot); live vs batch."
+	description = "Benchmark #3: reachability with streamed edge additions (live vs batch)."
 	classpath = sourceSets["main"].runtimeClasspath
-	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalColoringGrowthBenchmark")
+	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalReachBenchmark")
+}
+
+tasks.register<JavaExec>("runIncrementalColoringBenchmark") {
+	group = "examples"
+	description = "Benchmark #4: 5-colorability with a rotating mix of vertex/edge additions, edge retractions, and constraint additions (live vs batch)."
+	classpath = sourceSets["main"].runtimeClasspath
+	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalColoringBenchmark")
 }

@@ -1,6 +1,7 @@
 package at.ac.tuwien.kr.alpha.core.solver;
 
 import static at.ac.tuwien.kr.alpha.core.common.NoGood.enumeration;
+import java.util.Map;
 import static at.ac.tuwien.kr.alpha.core.common.NoGood.fact;
 import static at.ac.tuwien.kr.alpha.core.common.NoGood.headFirst;
 import static at.ac.tuwien.kr.alpha.core.common.NoGoodTest.fromOldLiterals;
@@ -626,57 +627,55 @@ public class NoGoodStoreAlphaRoamingTest {
 	}
 
 	@Test
-	public void purgeEnumerationNoGoods_unassignsBinaryEnumPropagationFromStructuralFact() {
+	public void purgeAndRestoreUnassignsBinaryEnumPropagationFromStructuralFact() {
 		// Structural fact: atom 1 is TRUE at dl 0.
 		assertNull(store.add(1, fact(fromOldLiterals(-1))));
 		assertNull(store.propagate());
 		assertEquals(TRUE, assignment.getTruth(1));
 
-		// Binary enum nogood {1, 2}: violated iff atom 1 = TRUE AND atom 2 = TRUE. Since atom 1
-		// is already TRUE at dl 0 from a structural fact (NOT a unary enum), the binary propagates
-		// atom 2 = FALSE at dl 0 via its BinaryWatchList. Without the new antecedent-removed seeding,
-		// the unary-seeded cascade in purgeEnumerationNoGoods would never reach atom 2 — the only
-		// reason literal is atom 1, which is not in the seed set.
+		// Hot-start snapshot of the dl-0 fixpoint before the enum nogood (atom 1 in it; atom 2 not yet
+		// assigned). This is what DefaultSolver captures just before the first enumeration nogood.
+		Map<Integer, ThriceTruth> snapshot = assignment.captureDl0NonClosingSnapshot();
+
+		// Binary enum nogood {1, 2}: atom 1 already TRUE at dl 0 → propagates atom 2 = FALSE at dl 0.
 		assertNull(store.add(2, enumeration(fromOldLiterals(1, 2))));
 		assertNull(store.propagate());
 		assertEquals(FALSE, assignment.getTruth(2));
 
+		// purge detaches the enum nogood from the watch lists; the snapshot restore un-assigns everything
+		// not in the pre-enum fixpoint (here the enum-forced atom 2). No dependency cascade involved.
 		store.purgeEnumerationNoGoods();
+		assignment.restoreToDl0Snapshot(snapshot);
 
-		assertEquals(TRUE, assignment.getTruth(1));   // structural fact preserved
-		assertFalse(assignment.isAssigned(2));        // dl-0 propagation by the purged enum is gone
+		assertEquals(TRUE, assignment.getTruth(1));   // in snapshot → kept
+		assertFalse(assignment.isAssigned(2));        // not in snapshot → un-assigned
 	}
 
 	@Test
-	public void purgeEnumerationNoGoods_unassignsMultiAryEnumPropagationViaWatchedNoGood() {
-		// Set up a multi-ary enum nogood {1, 2, 3, 4} whose watch-driven propagation later fires
-		// at dl 0. Choose atom 1 at dl 1 so the nogood is added with multiple unassigned literals
-		// (no add-time propagation; ordinary watches get set up). Backtrack to dl 0, then add
-		// structural facts for atoms 1, 2, 3. The watch on atom 1 (or 2/3) eventually triggers
-		// processWeaklyWatchedNoGood at dl 0 — that path uses the WatchedNoGood itself as the
-		// antecedent for the forced atom 4.
-		assertNull(assignment.choose(1, TRUE));
-		assertNull(store.add(1, enumeration(fromOldLiterals(1, 2, 3, 4))));
+	public void purgeAndRestoreUnassignsMultiAryEnumPropagation() {
+		// Structural facts: atoms 1, 2, 3 TRUE at dl 0.
+		assertNull(store.add(1, fact(fromOldLiterals(-1))));
+		assertNull(store.add(2, fact(fromOldLiterals(-2))));
+		assertNull(store.add(3, fact(fromOldLiterals(-3))));
 		assertNull(store.propagate());
-
-		store.backtrack();
-		assertFalse(assignment.isAssigned(1));
-
-		assertNull(store.add(2, fact(fromOldLiterals(-1))));
-		assertNull(store.add(3, fact(fromOldLiterals(-2))));
-		assertNull(store.add(4, fact(fromOldLiterals(-3))));
-		assertNull(store.propagate());
-
 		assertEquals(TRUE, assignment.getTruth(1));
 		assertEquals(TRUE, assignment.getTruth(2));
 		assertEquals(TRUE, assignment.getTruth(3));
+
+		// Snapshot before the enum nogood: {1, 2, 3} in it, atom 4 not yet assigned.
+		Map<Integer, ThriceTruth> snapshot = assignment.captureDl0NonClosingSnapshot();
+
+		// Multi-ary enum nogood {1, 2, 3, 4}: 1, 2, 3 already TRUE → propagates atom 4 = FALSE at dl 0.
+		assertNull(store.add(4, enumeration(fromOldLiterals(1, 2, 3, 4))));
+		assertNull(store.propagate());
 		assertEquals(FALSE, assignment.getTruth(4));
 
 		store.purgeEnumerationNoGoods();
+		assignment.restoreToDl0Snapshot(snapshot);
 
 		assertEquals(TRUE, assignment.getTruth(1));
 		assertEquals(TRUE, assignment.getTruth(2));
 		assertEquals(TRUE, assignment.getTruth(3));
-		assertFalse(assignment.isAssigned(4));         // unassigned via WatchedNoGood identity check
+		assertFalse(assignment.isAssigned(4));         // enum-forced, not in snapshot → un-assigned
 	}
 }

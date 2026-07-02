@@ -37,8 +37,10 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static at.ac.tuwien.kr.alpha.commons.util.Util.arrayGrowthSize;
@@ -299,80 +301,49 @@ public class TrailAssignment implements WritableAssignment, Checkable {
 		resetTrailPointersAndReplayOutOfOrderLiterals();
 	}
 
+	/**
+	 * Capture the current decision-level-0 assignment (atom -&gt; truth), excluding closing-forced atoms,
+	 * as a hot-start snapshot. Taken by the solver at a shot's first answer set, before any enumeration
+	 * nogood is added; {@link #restoreToDl0Snapshot} rewinds to it between shots instead of running the
+	 * enumeration-cleanup cascade.
+	 */
 	@Override
-	public void unassignAtDecisionLevelZeroWithDependents(Iterable<Integer> seedAtoms,
-			java.util.function.BiPredicate<Integer, Antecedent> antecedentRemoved) {
-		Set<Integer> toRemove = new HashSet<>();
-		for (Integer atom : seedAtoms) {
-			if (atom != null && values[atom] != 0 && getWeakDecisionLevel(atom) == 0) {
-				toRemove.add(atom);
+	public Map<Integer, ThriceTruth> captureDl0NonClosingSnapshot() {
+		Map<Integer, ThriceTruth> snapshot = new HashMap<>();
+		for (int atom = 1; atom < values.length; atom++) {
+			if (values[atom] == 0 || getWeakDecisionLevel(atom) != 0 || impliedBy[atom] == CLOSING_INDICATOR_ANTECEDENT) {
+				continue;
+			}
+			snapshot.put(atom, getTruth(atom));
+		}
+		return snapshot;
+	}
+
+	/**
+	 * Rewind decision level 0 to a snapshot from {@link #captureDl0NonClosingSnapshot}: un-assign every
+	 * dl-0 atom not in the snapshot (the enumeration-forced atoms, any answer-set closing atoms, and any
+	 * atoms derived during enumeration). The snapshot is a closed set — its atoms were all assigned before
+	 * the first enumeration nogood, so their reasons are other snapshot atoms — hence keeping them while
+	 * dropping the rest leaves no dangling antecedents, and the un-assignment is watch-safe.
+	 */
+	@Override
+	public void restoreToDl0Snapshot(Map<Integer, ThriceTruth> snapshot) {
+		List<Integer> toUnassign = new ArrayList<>();
+		for (int atom = 1; atom < values.length; atom++) {
+			if (values[atom] == 0 || getWeakDecisionLevel(atom) != 0) {
+				continue;
+			}
+			if (!snapshot.containsKey(atom)) {
+				toUnassign.add(atom);
+			} else if (checksEnabled && getTruth(atom) != snapshot.get(atom)) {
+				// A snapshot atom's dl-0 truth changed during enumeration — would break the closed-set
+				// (prefix) assumption the restore relies on. The measurements say this never happens; this
+				// guard turns it into a loud failure under internal checks rather than a silent bug.
+				throw oops("Snapshot dl-0 atom " + atom + " changed truth during enumeration: "
+						+ snapshot.get(atom) + " -> " + getTruth(atom));
 			}
 		}
-		// Seed any dl-0 atom whose antecedent itself is being removed. This covers non-unary enum/learned
-		// nogoods that propagated at dl 0 from reasons that aren't transitively reachable from the explicit
-		// seeds — e.g. a binary enum nogood {a, b} where a was true at dl 0 from a structural fact.
-		for (int i = 0; i < trailSize; i++) {
-			int atom = atomOf(trail[i]);
-			if (atom == 0 || values[atom] == 0) {
-				continue;
-			}
-			if (toRemove.contains(atom)) {
-				continue;
-			}
-			if (getWeakDecisionLevel(atom) != 0) {
-				continue;
-			}
-			Antecedent ant = impliedBy[atom];
-			if (ant == null || ant == CLOSING_INDICATOR_ANTECEDENT) {
-				continue;
-			}
-			if (antecedentRemoved.test(atom, ant)) {
-				toRemove.add(atom);
-			}
-		}
-		if (toRemove.isEmpty()) {
-			return;
-		}
-		boolean changed;
-		do {
-			changed = false;
-			for (int i = 0; i < trailSize; i++) {
-				int atom = atomOf(trail[i]);
-				if (atom == 0 || values[atom] == 0) {
-					// Stale trail entry: removeLastDecisionLevel zeroes values but leaves the trail
-					// slot, and an atom can appear twice in the trail (MBT then TRUE upgrade).
-					continue;
-				}
-				if (toRemove.contains(atom)) {
-					continue;
-				}
-				if (getWeakDecisionLevel(atom) != 0) {
-					continue;
-				}
-				Antecedent ant = impliedBy[atom];
-				if (ant == null || ant == CLOSING_INDICATOR_ANTECEDENT) {
-					continue;
-				}
-				// Resolve shallow (binary) antecedents to a full literal list so the dependency check works.
-				int[] reasons;
-				if (ant instanceof ShallowAntecedent) {
-					reasons = ((ShallowAntecedent) ant)
-							.instantiateAntecedent(atomToLiteral(atom, !getTruth(atom).toBoolean()))
-							.getReasonLiterals();
-				} else {
-					reasons = ant.getReasonLiterals();
-				}
-				for (int reasonLit : reasons) {
-					int reasonAtom = atomOf(reasonLit);
-					if (reasonAtom != atom && toRemove.contains(reasonAtom)) {
-						toRemove.add(atom);
-						changed = true;
-						break;
-					}
-				}
-			}
-		} while (changed);
-		unassignManyAtDecisionLevelZero(toRemove);
+		unassignManyAtDecisionLevelZero(toUnassign);
 	}
 
 	@Override

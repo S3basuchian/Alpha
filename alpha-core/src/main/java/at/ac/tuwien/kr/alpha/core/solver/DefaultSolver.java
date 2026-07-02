@@ -43,6 +43,7 @@ import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.Map;
 import java.util.Map.Entry;
+// ThriceTruth is in this package (at.ac.tuwien.kr.alpha.core.solver); no import needed.
 import java.util.Random;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -107,6 +108,12 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 	 * {@link NoGoodStore#purgeEnumerationNoGoods()} during reset. Cleared again at the end of reset.
 	 */
 	private boolean enumerationUsed = false;
+
+	// dl-0 hot-start snapshot captured at this shot's first answer set, before any enumeration nogood is
+	// added. {@link #resetForNewShot()} rewinds dl 0 to it between shots — a single rewind that drops the
+	// answer set's closing atoms together with every enumeration-forced/-derived dl-0 atom. Null until the
+	// first answer set of a shot is produced (and stays null for a shot that finds none).
+	private Map<Integer, ThriceTruth> dl0Snapshot;
 
 	private final PerformanceLog performanceLog;
 	
@@ -183,11 +190,14 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 	 * {@link NoGoodStore}'s structural and learned nogoods plus the branching heuristic's activity scores,
 	 * and the atom-store / grounder coupling.  Discards the choice stack and the {@code dl &gt; 0}
 	 * portion of the assignment by backjumping to decision level 0; if the previous shot added
-	 * enumeration nogoods to the store, those are purged via
-	 * {@link NoGoodStore#purgeEnumerationNoGoods()} (which also un-assigns any literals a unary
-	 * enumeration nogood forced at dl 0).  The search-state flags are reset so the next call to
-	 * {@link #tryAdvance} runs {@link #initializeSearch()} again — which pulls any newly-derived nogoods
-	 * from the grounder and ingests them into the existing store.
+	 * enumeration nogoods to the store, those are purged via {@link NoGoodStore#purgeEnumerationNoGoods()}.
+	 * Then dl 0 is cleaned of the previous shot's residue: if that shot produced an answer set, dl 0 is
+	 * rewound to the snapshot captured at its first answer set ({@link #dl0Snapshot}) — a single hot-start
+	 * restore that drops the answer set's closing atoms together with every enumeration-forced/-derived dl-0
+	 * atom; if it produced none (UNSAT), there is no snapshot, so any dl-0 closing atoms left by an UNSAT
+	 * closure are stripped directly via {@link WritableAssignment#unassignClosingAssignmentsAtDecisionLevelZero()}.
+	 * The search-state flags are reset so the next call to {@link #tryAdvance} runs {@link #initializeSearch()}
+	 * again — which pulls any newly-derived nogoods from the grounder and ingests them into the existing store.
 	 *
 	 * <p>Only monotone (add-only) shots reach this reset. Retraction shots go through
 	 * {@link #retractInPlace(Collection)} instead, which additionally clears the trail and drops learned
@@ -197,13 +207,22 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 		if (assignment.getDecisionLevel() > 0) {
 			choiceManager.backjump(0);
 		}
-		// Closing assignments (atoms forced FALSE by `close()` during the previous shot) are tied to that
-		// shot's answer set. They must go before a new shot starts, otherwise newly-added rules/facts
-		// that derive a closed atom TRUE would conflict at dl 0 and the search would terminate UNSAT.
-		assignment.unassignClosingAssignmentsAtDecisionLevelZero();
 		if (enumerationUsed) {
+			// This shot enumerated: detach its enumeration nogoods from the store.
 			store.purgeEnumerationNoGoods();
 			enumerationUsed = false;
+		}
+		if (dl0Snapshot != null) {
+			// This shot found an answer set (single or enumerated): hot-start dl 0 from the snapshot captured
+			// at its first answer set — one rewind that drops the answer set's closing atoms AND every
+			// enumeration-forced/-derived dl-0 atom.
+			assignment.restoreToDl0Snapshot(dl0Snapshot);
+			dl0Snapshot = null;
+		} else {
+			// No answer set this shot (UNSAT): there is no snapshot to restore from, but an UNSAT closure may
+			// still have left dl-0 closing atoms — strip them, else a later fact deriving a closed atom TRUE
+			// would conflict at dl 0 and spuriously report UNSAT.
+			assignment.unassignClosingAssignmentsAtDecisionLevelZero();
 		}
 		searchState.hasBeenInitialized = false;
 		searchState.isSearchSpaceCompletelyExplored = false;
@@ -235,6 +254,9 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 			enumerationUsed = false;
 		}
 		// Clear the whole trail (also wipes per-atom change callbacks, re-registered by choiceManager.reset).
+		// The pre-retraction dl-0 snapshot describes that now-cleared trail, so drop it — the retraction
+		// shot re-captures a fresh one at its own first answer set.
+		dl0Snapshot = null;
 		assignment.clear();
 		// Drop all learned nogoods — the assignment is already clear, so this only detaches watches/counters.
 		store.dropAllLearnedNoGoods();
@@ -247,7 +269,8 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 	}
 
 	private void prepareForSubsequentAnswerSet() {
-		// We already found one Answer-Set and are requested to find another one.
+		// We already found one Answer-Set and are requested to find another one. The dl-0 hot-start snapshot
+		// was already captured when that first answer set was produced (see provideAnswerSet).
 		enumerationUsed = true;
 		searchState.afterAllAtomsAssigned = false;
 		if (assignment.getDecisionLevel() == 0) {
@@ -313,6 +336,12 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 	}
 
 	private void provideAnswerSet(Consumer<? super AnswerSet> action) {
+		// Capture the clean dl-0 fixpoint (minus closing atoms) at this shot's first answer set, before any
+		// enumeration nogood is added, so resetForNewShot can hot-start the next shot from it regardless of
+		// how many answer sets the caller pulls — a single findFirst() still leaves a usable snapshot.
+		if (dl0Snapshot == null) {
+			dl0Snapshot = assignment.captureDl0NonClosingSnapshot();
+		}
 		// NOTE: If we would do optimization, we would now have a guaranteed upper bound.
 		AnswerSet as = translate(assignment.getTrueAssignments());
 		LOGGER.debug("Answer-Set found: {}", as);

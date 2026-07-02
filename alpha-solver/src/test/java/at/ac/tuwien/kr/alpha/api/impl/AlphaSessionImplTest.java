@@ -35,6 +35,24 @@ public class AlphaSessionImplTest {
 		}
 	}
 
+	/**
+	 * UNSAT-shot closing residue must not leak into the next monotone shot. In shot 1, {@code e} is
+	 * unsupported and closed FALSE, {@code d} loses support, and {@code :- not d} forces {@code d} and fires,
+	 * so the shot is UNSAT with {@code e} closed FALSE at dl 0. Because an UNSAT shot produces no answer set,
+	 * there is no dl-0 snapshot to restore from; {@code resetForNewShot} must instead strip the stale
+	 * {@code F e} directly, otherwise adding {@code e} as a fact conflicts at dl 0 and spuriously stays UNSAT.
+	 */
+	@Test
+	public void closedFalseAtomInUnsatShotThenAddedAsFact() {
+		Alpha alpha = new AlphaImpl();
+		AlphaSession session = alpha.newSession();
+		session.add("d :- e. :- not d.");
+		assertTrue(collect(session).isEmpty(), "e unsupported -> d unsupported -> ':- not d' fires -> UNSAT");
+		session.add("e.");
+		assertEquals(AnswerSetsParser.parse("{ d, e }"), collect(session),
+				"e now a fact -> d derived -> SAT; must not carry stale closing FALSE for e");
+	}
+
 	@Test
 	public void singleAddThenSolve() {
 		Alpha alpha = new AlphaImpl();
@@ -1222,9 +1240,9 @@ public class AlphaSessionImplTest {
 	}
 
 	/**
-	 * Repro for the soundness regression observed on IncrementalReachRetractionBenchmark with
-	 * tombstoning: after retracting an edge and adding new ones, the next solve sometimes returns
-	 * UNSAT when there is in fact a valid answer set. Cross-checks against batch mode.
+	 * Repro for a soundness regression in reach-style retraction with tombstoning: after retracting
+	 * an edge and adding new ones, the next solve sometimes returns UNSAT when there is in fact a
+	 * valid answer set. Cross-checks against batch mode.
 	 */
 	@Test
 	public void retractionAddSequencePreservesAnswerSets() throws Exception {

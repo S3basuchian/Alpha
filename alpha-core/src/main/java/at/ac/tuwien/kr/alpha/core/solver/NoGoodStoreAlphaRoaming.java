@@ -41,12 +41,10 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.BiPredicate;
 
 import static at.ac.tuwien.kr.alpha.commons.util.Util.arrayGrowthSize;
 import static at.ac.tuwien.kr.alpha.commons.util.Util.oops;
@@ -248,80 +246,24 @@ public class NoGoodStoreAlphaRoaming implements NoGoodStore, BinaryNoGoodPropaga
 
 	@Override
 	public void purgeEnumerationNoGoods() {
-		// Snapshot multi-ary enum nogoods before we drop them, so the cascade can recognise them as
-		// removed antecedents on the dl-0 trail.
-		List<WatchedNoGood> enumMultiAry = new ArrayList<>(enumerationWatchedNoGoods);
-		for (WatchedNoGood wng : enumMultiAry) {
+		// Detach the shot's enumeration nogoods from the store's watch lists (multi-ary + binary), and drop
+		// the unary tracking. The dl-0 atoms these nogoods forced are un-assigned by the solver's hot-start
+		// snapshot restore ({@link WritableAssignment#restoreToDl0Snapshot}), so no dependency cascade is
+		// needed here — that is why this method only touches the store, not the assignment.
+		for (WatchedNoGood wng : new ArrayList<>(enumerationWatchedNoGoods)) {
 			removeFromWatches(wng);
 		}
 		enumerationWatchedNoGoods.clear();
-
-		Map<Integer, Set<Integer>> binaryOthers = collectBinaryOtherAtomsByForLiteral(enumerationBinaryNoGoods);
 		for (NoGood binary : enumerationBinaryNoGoods) {
-			int lit0 = binary.getLiteral(0);
-			int lit1 = binary.getLiteral(1);
-			binaryWatches[lit0].removeOrdinaryNoGood(lit1);
-			binaryWatches[lit1].removeOrdinaryNoGood(lit0);
+			binaryWatches[binary.getLiteral(0)].removeOrdinaryNoGood(binary.getLiteral(1));
+			binaryWatches[binary.getLiteral(1)].removeOrdinaryNoGood(binary.getLiteral(0));
 			counter.remove(binary);
 		}
 		enumerationBinaryNoGoods.clear();
-
-		// Transitive un-assign: each unary enum nogood forced its atom at dl 0, which may have cascaded
-		// through structural support nogoods to other dl-0 assignments. Un-assigning the seed atoms
-		// alone would leave those cascaded atoms pinned by now-invalid antecedents — blocking valid
-		// answer sets in the next shot. The antecedent-removed predicate additionally catches atoms
-		// propagated at dl 0 directly by binary/multi-ary enum nogoods that aren't reachable from the
-		// unary-seeded chains (e.g. when the propagation's reason atoms are all structural facts).
-		ArrayList<Integer> forcedAtoms = new ArrayList<>(enumerationUnaryNoGoods.size());
 		for (NoGood unary : enumerationUnaryNoGoods) {
-			forcedAtoms.add(atomOf(unary.getLiteral(0)));
 			counter.remove(unary);
 		}
-		assignment.unassignAtDecisionLevelZeroWithDependents(forcedAtoms,
-				antecedentRemovedPredicate(enumMultiAry, binaryOthers));
 		enumerationUnaryNoGoods.clear();
-	}
-
-	/**
-	 * Index a list of binary nogoods by the literal a {@link BinaryWatchList} would key on, mapping it
-	 * to the set of "other-side" atoms whose dl-0 propagation through that watch list came from one of
-	 * the listed nogoods. Used by {@link #antecedentRemovedPredicate} to recognise binary-propagated
-	 * dl-0 atoms during cascade seeding.
-	 */
-	private static Map<Integer, Set<Integer>> collectBinaryOtherAtomsByForLiteral(List<NoGood> binaries) {
-		if (binaries.isEmpty()) {
-			return null;
-		}
-		Map<Integer, Set<Integer>> result = new HashMap<>();
-		for (NoGood binary : binaries) {
-			int lit0 = binary.getLiteral(0);
-			int lit1 = binary.getLiteral(1);
-			// Either literal could be the BinaryWatchList's forLiteral; record both directions.
-			result.computeIfAbsent(lit0, k -> new HashSet<>()).add(atomOf(lit1));
-			result.computeIfAbsent(lit1, k -> new HashSet<>()).add(atomOf(lit0));
-		}
-		return result;
-	}
-
-	private BiPredicate<Integer, Antecedent> antecedentRemovedPredicate(
-			List<WatchedNoGood> removedMultiAry, Map<Integer, Set<Integer>> binaryOthersByForLiteral) {
-		if (removedMultiAry.isEmpty() && binaryOthersByForLiteral == null) {
-			return (atom, ant) -> false;
-		}
-		IdentityHashMap<Antecedent, Boolean> removedSet = new IdentityHashMap<>(removedMultiAry.size() * 2);
-		for (WatchedNoGood wng : removedMultiAry) {
-			removedSet.put(wng, Boolean.TRUE);
-		}
-		return (atom, ant) -> {
-			if (removedSet.containsKey(ant)) {
-				return true;
-			}
-			if (binaryOthersByForLiteral != null && ant instanceof BinaryWatchList) {
-				Set<Integer> others = binaryOthersByForLiteral.get(((BinaryWatchList) ant).forLiteral);
-				return others != null && others.contains(atom);
-			}
-			return false;
-		};
 	}
 
 	void removeFromWatches(WatchedNoGood toRemove) {
