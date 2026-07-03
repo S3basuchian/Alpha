@@ -250,9 +250,16 @@ public final class AlphaSessionImpl implements AlphaSession {
 				grounder.selectiveWakeUpForNewRules(newRules);
 			}
 			if (retractionThisShot) {
+				// Retraction tears down the previous shot's enumeration nogoods AND drops all learned nogoods
+				// from the store; forget both from the grounder's dedup registry so a later constraint that
+				// grounds to a structurally-identical (now-dropped) nogood is re-emitted, not deduped away.
+				sessionGrounder.forgetSolverInternalRegistrations(true);
 				((DefaultSolver) liveSolver).retractInPlace(sessionGrounder.survivingUnitNoGoods());
 				retractionThisShot = false;
 			} else {
+				// Monotone reset purges only the previous shot's enumeration nogoods (learned nogoods are
+				// kept); forget just the enumeration registry entries to match.
+				sessionGrounder.forgetSolverInternalRegistrations(false);
 				((DefaultSolver) liveSolver).resetForNewShot();
 			}
 			solver = liveSolver;
@@ -308,13 +315,13 @@ public final class AlphaSessionImpl implements AlphaSession {
 		// (making every kept watch trivially valid — no re-ingest), drops all learned nogoods (any may be
 		// unsound in the reduced program), and re-asserts the surviving units. VSIDS is preserved for free
 		// (same solver object). Dead structural nogoods stay inert; re-adding a fact re-activates them.
-		Set<Integer> retractedAtomIds = grounder.retractFacts(pendingRetractions);
+		Set<Integer> droppedFactUnitNoGoodIds = grounder.retractFacts(pendingRetractions);
 		this.pendingRetractions.clear();
-		if (retractedAtomIds.isEmpty()) {
+		if (droppedFactUnitNoGoodIds.isEmpty()) {
 			// Phantom retraction (every "removed" fact had never been asserted): nothing to invalidate.
 			return;
 		}
-		this.sessionGrounder.gcRetractedState(retractedAtomIds);
+		this.sessionGrounder.gcRetractedState(droppedFactUnitNoGoodIds);
 		this.retractionThisShot = true;
 	}
 

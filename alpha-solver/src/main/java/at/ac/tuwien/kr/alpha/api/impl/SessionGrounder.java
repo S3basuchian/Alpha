@@ -14,6 +14,7 @@ import at.ac.tuwien.kr.alpha.core.common.IntIterator;
 import java.util.List;
 
 import at.ac.tuwien.kr.alpha.core.common.NoGood;
+import at.ac.tuwien.kr.alpha.core.common.NoGoodInterface;
 import at.ac.tuwien.kr.alpha.core.grounder.Grounder;
 import at.ac.tuwien.kr.alpha.core.grounder.NaiveGrounder;
 
@@ -51,6 +52,14 @@ final class SessionGrounder implements Grounder {
 	private final Map<Integer, Integer> pendingChoiceOff = new LinkedHashMap<>();
 	private final Map<Integer, Set<Integer>> pendingHeadsToBodies = new LinkedHashMap<>();
 
+	// Registry ids of solver-internal nogoods (learned + enumeration) that the solver registered via
+	// {@link #register}. Tracked so their entries can be dropped from the grounder's dedup registry when
+	// the store tears them down at a shot boundary. Without this, a constraint added in a later shot that
+	// grounds to a structurally-identical nogood would be deduplicated against a stale entry and never
+	// reach the solver — silently losing the constraint (see {@link #forgetSolverInternalRegistrations}).
+	private final Set<Integer> registeredEnumerationIds = new LinkedHashSet<>();
+	private final Set<Integer> registeredLearnedIds = new LinkedHashSet<>();
+
 	private boolean replayOnNextBatch = false;
 
 	SessionGrounder(NaiveGrounder delegate) {
@@ -78,32 +87,23 @@ final class SessionGrounder implements Grounder {
 	 * retraction sound: keeping the live solver instead would carry watches placed for the previous shot's
 	 * (now-cleared) assignment, which mis-propagate multi-ary nogoods and yield spurious UNSAT.
 	 *
-	 * @param retractedAtomIds atom ids of facts that were retracted this shot
+	 * @param retractedUnitNoGoodIds ids of the retracted facts' OWN unit nogoods (from
+	 *        {@link NaiveGrounder#retractFacts}) — NOT every unit nogood on the retracted atoms
 	 */
-	void gcRetractedState(Set<Integer> retractedAtomIds) {
-		if (retractedAtomIds.isEmpty()) {
+	void gcRetractedState(Set<Integer> retractedUnitNoGoodIds) {
+		if (retractedUnitNoGoodIds.isEmpty()) {
 			return;
 		}
 
-		// Drop only the retracted facts' unit nogoods {F f}_1 from the cumulative recording; keep every
-		// other (structural) nogood. A dead structural nogood (whose body atom can no longer be true) is
-		// inert once that atom is closed to false, and re-adding the fact cheaply re-activates it without
-		// re-grounding — so no dead-atom scan, no atom removal, and no working-memory purge are needed. The
-		// live solver is discarded and rebuilt from this (near-unchanged) cumulative state on the next
-		// solve, which re-installs correct watches — that is what keeps retraction sound (a kept live
-		// solver would carry stale watches for the previous shot's assignment).
-		Set<Integer> unitIdsToRemove = new java.util.HashSet<>();
-		for (Map.Entry<Integer, NoGood> e : cumulativeNoGoods.entrySet()) {
-			NoGood n = e.getValue();
-			if (n.size() == 1) {
-				int atomId = at.ac.tuwien.kr.alpha.core.programs.atoms.Literals.atomOf(n.getLiteral(0));
-				if (retractedAtomIds.contains(atomId)) {
-					unitIdsToRemove.add(e.getKey());
-				}
-			}
-		}
-		cumulativeNoGoods.keySet().removeAll(unitIdsToRemove);
-		delegate.forgetNoGoods(unitIdsToRemove);
+		// Drop exactly the retracted facts' own unit nogoods {F f}_1 from the cumulative recording; keep every
+		// other nogood, including any {F a}_1 a constraint ':- not a' emitted for the same atom (which is
+		// structural and must keep forcing a even after the fact a is gone). Scanning by atom id would wrongly
+		// also drop such constraint-derived units. A dead structural nogood (whose body atom can no longer be
+		// true) is inert once that atom is closed to false, and re-adding the fact cheaply re-activates it — so
+		// no dead-atom scan, no atom removal, and no working-memory purge are needed. The surviving units are
+		// re-asserted in place by {@link DefaultSolver#retractInPlace}.
+		cumulativeNoGoods.keySet().removeAll(retractedUnitNoGoodIds);
+		delegate.forgetNoGoods(retractedUnitNoGoodIds);
 	}
 
 	/**
@@ -189,7 +189,41 @@ final class SessionGrounder implements Grounder {
 		// and choice-combination exclusions that would invalidly block valid answer sets after the
 		// program is extended in a subsequent shot. A fresh solver re-discovers enumeration nogoods
 		// as it iterates.
-		return delegate.register(noGood);
+		int id = delegate.register(noGood);
+		// Track by type so the dedup-registry entry can be forgotten when the store drops this nogood at a
+		// shot boundary (enumeration: every shot; learned: on retraction). Otherwise a later constraint that
+		// grounds to a structurally-identical nogood would be deduped away and lost.
+		NoGoodInterface.Type type = noGood.getType();
+		if (type == NoGoodInterface.Type.ENUMERATION) {
+			registeredEnumerationIds.add(id);
+		} else if (type == NoGoodInterface.Type.LEARNT) {
+			registeredLearnedIds.add(id);
+		}
+		return id;
+	}
+
+	/**
+	 * Drop the grounder dedup-registry entries of solver-internal nogoods that the store is tearing down at
+	 * a shot boundary, so a constraint added in a later shot that grounds to a structurally-identical nogood
+	 * is re-emitted to the solver rather than silently deduplicated away.
+	 *
+	 * <p>Enumeration entries are always forgotten (they are purged from the store every shot). Learned
+	 * entries are forgotten only when {@code includeLearned} is true, i.e. on retraction, where the store
+	 * drops <em>all</em> learned nogoods; on a monotone reset learned nogoods are kept, so their registry
+	 * entries are kept too. Forgetting an id only affects future dedup decisions — it never removes anything
+	 * from the store — so at worst a later re-grounding re-emits a redundant (sound) nogood.
+	 *
+	 * @param includeLearned whether to also forget learned-nogood registry entries (true on retraction)
+	 */
+	void forgetSolverInternalRegistrations(boolean includeLearned) {
+		if (!registeredEnumerationIds.isEmpty()) {
+			delegate.forgetNoGoods(registeredEnumerationIds);
+			registeredEnumerationIds.clear();
+		}
+		if (includeLearned && !registeredLearnedIds.isEmpty()) {
+			delegate.forgetNoGoods(registeredLearnedIds);
+			registeredLearnedIds.clear();
+		}
 	}
 
 	private static void mergeHeadsToBodies(Map<Integer, Set<Integer>> target, Map<Integer, Set<Integer>> src) {

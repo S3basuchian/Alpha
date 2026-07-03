@@ -45,6 +45,14 @@ tasks.withType<Test> {
 	testLogging {
 		exceptionFormat = TestExceptionFormat.FULL
 	}
+
+	// Forward differential-fuzzer knobs (-Dcfuzz.* / -Dcalib.*) to the forked test JVM.
+	for ((k, v) in System.getProperties()) {
+		val key = k.toString()
+		if (key.startsWith("cfuzz.") || key.startsWith("calib.") || key.startsWith("alpha.lngd.")) {
+			systemProperty(key, v.toString())
+		}
+	}
 }
 
 // Fix checkstyle version.

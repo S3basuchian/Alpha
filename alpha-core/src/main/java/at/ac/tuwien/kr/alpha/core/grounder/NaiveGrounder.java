@@ -377,11 +377,18 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 	 * @param retractedFacts facts to remove (those not present in factsFromProgram are silently skipped)
 	 * @return the set of atom ids whose unit nogoods should be excluded from the next solver's replay
 	 */
+	/**
+	 * Retract the given facts in session mode. Returns the ids of the <em>fact unit nogoods</em>
+	 * ({@code {F f}_1}, recorded in {@link #factAtomToUnitNoGoodId}) that were dropped — NOT the atom ids.
+	 * The caller drops exactly these nogoods; other unit nogoods on the same atom (e.g. a {@code {F a}_1}
+	 * produced by a constraint {@code :- not a}) are structural and must survive, so the retraction only
+	 * frees the atom from being <em>given</em>, not from being <em>required</em>.
+	 */
 	public Set<Integer> retractFacts(Iterable<Atom> retractedFacts) {
 		if (!sessionMode) {
 			throw new IllegalStateException("retractFacts requires session mode");
 		}
-		Set<Integer> dropped = new HashSet<>();
+		Set<Integer> droppedUnitNoGoodIds = new HashSet<>();
 		for (Atom fact : retractedFacts) {
 			Predicate predicate = fact.getPredicate();
 			LinkedHashSet<Instance> bucket = factsFromProgram.get(predicate);
@@ -403,15 +410,18 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 					positive.removeInstance(instance);
 				}
 			}
-			// Locate this fact's atom id and detach its unit nogood from the active set.
+			// Detach this fact's OWN unit nogood (only). Any other unit nogood on the same atom — e.g. a
+			// {F a}_1 emitted by a constraint ':- not a' — is structural and must be kept, otherwise
+			// retracting the fact would silently stop enforcing that constraint.
 			if (atomStore.contains(fact)) {
 				int atomId = atomStore.get(fact);
-				if (factAtomToUnitNoGoodId.remove(atomId) != null) {
-					dropped.add(atomId);
+				Integer unitNoGoodId = factAtomToUnitNoGoodId.remove(atomId);
+				if (unitNoGoodId != null) {
+					droppedUnitNoGoodIds.add(unitNoGoodId);
 				}
 			}
 		}
-		return dropped;
+		return droppedUnitNoGoodIds;
 	}
 
 	/**
