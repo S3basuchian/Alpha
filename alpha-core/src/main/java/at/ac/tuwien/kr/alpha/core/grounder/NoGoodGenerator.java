@@ -62,7 +62,13 @@ public class NoGoodGenerator {
 	private final ChoiceRecorder choiceRecorder;
 	private final Map<Predicate, LinkedHashSet<Instance>> factsFromProgram;
 	private final CompiledProgram programAnalysis;
-	private final Set<CompiledRule> uniqueGroundRulePerGroundHead;
+	/**
+	 * Non-ground rules whose ground instances currently qualify for a support ("only-via"/completion) nogood.
+	 * Not final: in session mode the grounder recomputes this against the current accumulated program after every
+	 * rule/fact change (a head that gains a second defining rule or a fact drops out) and refreshes it here via
+	 * {@link #setUniqueGroundRulePerGroundHead(Set)}. In one-shot mode it is set once at construction.
+	 */
+	private Set<CompiledRule> uniqueGroundRulePerGroundHead;
 
 	/**
 	 * When {@code true}, fact literals are <em>not</em> elided from generated nogoods: positive fact literals
@@ -90,6 +96,15 @@ public class NoGoodGenerator {
 		this.programAnalysis = programAnalysis;
 		this.uniqueGroundRulePerGroundHead = uniqueGroundRulePerGroundHead;
 		this.keepFactsAsLiterals = keepFactsAsLiterals;
+	}
+
+	/**
+	 * Replaces the set of non-ground rules whose ground instances receive a support nogood. Called by
+	 * {@link at.ac.tuwien.kr.alpha.core.grounder.NaiveGrounder} in session mode whenever the accumulated program
+	 * changes, so support nogoods are only emitted for heads that are still unique-defined and fact-free.
+	 */
+	void setUniqueGroundRulePerGroundHead(Set<CompiledRule> uniqueGroundRulePerGroundHead) {
+		this.uniqueGroundRulePerGroundHead = uniqueGroundRulePerGroundHead;
 	}
 
 	/**
@@ -149,7 +164,14 @@ public class NoGoodGenerator {
 
 		// If the rule head is unique, add support.
 		if (uniqueGroundRulePerGroundHead.contains(nonGroundRule)) {
-			result.add(NoGood.support(headLiteral, bodyRepresentingLiteral));
+			// In session (keepFactsAsLiterals) mode the support ("only-via"/completion) nogood is non-monotone —
+			// a fact or a second defining rule added for the head in a later shot gives it another support and
+			// falsifies it — so tag it ENUMERATION: the between-shot purge drops it and taints any learned
+			// resolvent, exactly as for foundedness nogoods. In one-shot mode the program is fixed, so keep the
+			// permanent SUPPORT tag.
+			result.add(keepFactsAsLiterals
+					? NoGood.supportEnumeration(headLiteral, bodyRepresentingLiteral)
+					: NoGood.support(headLiteral, bodyRepresentingLiteral));
 		}
 
 		// If the body of the rule contains negation, add choices.

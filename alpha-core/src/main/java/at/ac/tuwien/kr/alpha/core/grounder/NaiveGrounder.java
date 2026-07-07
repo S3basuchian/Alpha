@@ -121,6 +121,15 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 	private final ArrayList<NoGood> pendingFactUnitNoGoods = new ArrayList<>();
 
 	/**
+	 * Session mode only: set whenever the accumulated program changes ({@link #extendWithRules},
+	 * {@link #extendWithFacts}, {@link #retractFacts}) so that the next {@link #getNoGoods(Assignment)} recomputes
+	 * the unique-head set from the current program and refreshes the {@link NoGoodGenerator}. This keeps the
+	 * ENUMERATION-tagged support nogoods sound: a head that gained a fact or a second defining rule no longer
+	 * receives one. The program is fixed within a shot, so one recompute per change is enough.
+	 */
+	private boolean uniqueHeadSetDirty = false;
+
+	/**
 	 * In session mode, maps each currently-active fact atom's id to the id of its unit nogood. Used by
 	 * the {@link at.ac.tuwien.kr.alpha.api.impl.SessionGrounder} on retraction: a fact's unit nogood
 	 * must be excluded from replay when its fact has been retracted. Populated on bootstrap and on
@@ -243,6 +252,9 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 				workingMemory.addInstance(predicate, true, instance);
 				if (sessionMode) {
 					queueFactUnitNoGood(fact);
+					// A new fact for `predicate` removes any support nogood for that head (it now has an
+					// extra, empty-body support); force a recompute before the next grounding.
+					uniqueHeadSetDirty = true;
 				}
 			}
 		}
@@ -399,6 +411,9 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 			if (!bucket.remove(instance)) {
 				continue;
 			}
+			// Removing a fact can restore a head predicate's uniqueness (its last fact is gone), making it
+			// eligible for support nogoods again; force a recompute before the next grounding.
+			uniqueHeadSetDirty = true;
 			// Remove from working memory's positive storage so further rule grounding sees the fact gone.
 			// IndexedInstanceStorage.removeInstance throws when there are unprocessed recently-added
 			// instances; in a retraction shot the recently-added queue may contain the just-added fact
@@ -548,6 +563,9 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 			if (knownNonGroundRules.put(rule.getRuleId(), rule) != null) {
 				continue; // already known, skip
 			}
+			// A new defining rule can make a previously unique-headed predicate non-unique (or, rarely, the
+			// reverse); force a recompute of the support-nogood-eligible set before the next grounding.
+			uniqueHeadSetDirty = true;
 			for (Predicate predicate : rule.getOccurringPredicates()) {
 				workingMemory.initialize(predicate);
 			}
@@ -609,17 +627,17 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 	}
 
 	private Set<CompiledRule> getRulesWithUniqueHead() {
-		// In session mode the unique-head support optimisation is unsound. The optimisation emits a support
-		// nogood {Tp, F(body)} ("p can only be true via this single body") for any head p whose predicate
-		// has exactly one defining rule and no facts. A fact for p added in a LATER shot gives p an
-		// additional, empty-body support; the stale support nogood then forces the body true whenever the
-		// fact forces p true, wrongly eliminating answer sets in which the body is false (e.g. "{a}. p:-a."
-		// then adding fact "p." loses the answer set {p}). The check below already disables the optimisation
-		// when a fact for the head is present at bootstrap, but session mode cannot see future facts, so it
-		// must forgo the optimisation entirely. Foundedness is then handled by the choice/unfoundedness
-		// mechanism, exactly as it already is for predicates defined by more than one rule.
+		// Session mode: the unique-head support ("only-via"/completion) nogood {Tp, F(body)} is non-monotone — a
+		// fact or a second defining rule for p added in a LATER shot gives p another support and falsifies it
+		// (e.g. "{a}. p:-a." then adding fact "p." would lose the answer set {p}). Rather than forgo the
+		// optimisation, session mode emits it tagged ENUMERATION (see NoGoodGenerator) so the between-shot purge
+		// drops it and taints any learned resolvent, the dual of how foundedness nogoods are handled. Soundness
+		// then only requires that the set be computed against the CURRENT accumulated program — knownNonGroundRules
+		// (which grows with extendWithRules, unlike the frozen `program`) and the live factsFromProgram — so a head
+		// that has since gained a fact or a second rule is correctly excluded. The grounder recomputes this after
+		// every program change (see the uniqueHeadSetDirty drain in getNoGoods) and refreshes the NoGoodGenerator.
 		if (sessionMode) {
-			return java.util.Collections.emptySet();
+			return getRulesWithUniqueHeadFromCurrentProgram();
 		}
 		// FIXME: below optimisation (adding support nogoods if there is only one rule instantiation per unique atom over the interpretation) could
 		// be done as a transformation (adding a non-ground constraint corresponding to the nogood that is generated by the grounder).
@@ -650,6 +668,54 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 			occurringVariablesBody.removeAll(occurringVariablesHead);
 
 			// Check if ever body variables occurs in the head.
+			if (occurringVariablesBody.isEmpty()) {
+				uniqueGroundRulePerGroundHead.add(nonGroundRule);
+			}
+		}
+		return uniqueGroundRulePerGroundHead;
+	}
+
+	/**
+	 * The session-mode analogue of the batch computation in {@link #getRulesWithUniqueHead()}: identical logic,
+	 * but the per-head-predicate defining rules are taken from the CURRENT accumulated {@link #knownNonGroundRules}
+	 * (which grows across shots via {@link #extendWithRules}) rather than the frozen construction-time
+	 * {@code program.getPredicateDefiningRules()}, and facts from the live {@link #factsFromProgram}. This makes a
+	 * head that has since gained a second defining rule or a fact drop out of the set, which is exactly what keeps
+	 * the ENUMERATION-tagged support nogoods sound: none is ever emitted for a head that currently has another
+	 * support. The program does not change within a shot, so recomputing once per program change (see the
+	 * {@code uniqueHeadSetDirty} drain in {@link #getNoGoods(Assignment)}) suffices.
+	 */
+	private Set<CompiledRule> getRulesWithUniqueHeadFromCurrentProgram() {
+		// Group the current non-ground rules by head predicate (constraints have no head; skip them).
+		final Map<Predicate, LinkedHashSet<CompiledRule>> definingRulesByHeadPredicate = new LinkedHashMap<>();
+		for (CompiledRule rule : knownNonGroundRules.values()) {
+			if (rule.isConstraint()) {
+				continue;
+			}
+			definingRulesByHeadPredicate.computeIfAbsent(rule.getHeadAtom().getPredicate(), k -> new LinkedHashSet<>()).add(rule);
+		}
+
+		final Set<CompiledRule> uniqueGroundRulePerGroundHead = new HashSet<>();
+		for (Map.Entry<Predicate, LinkedHashSet<CompiledRule>> headDefiningRules : definingRulesByHeadPredicate.entrySet()) {
+			if (headDefiningRules.getValue().size() != 1) {
+				continue;
+			}
+			CompiledRule nonGroundRule = headDefiningRules.getValue().iterator().next();
+			Atom headAtom = nonGroundRule.getHeadAtom();
+
+			// Rule is not guaranteed unique if there are (currently) facts for the head predicate.
+			LinkedHashSet<Instance> potentialFacts = factsFromProgram.get(headAtom.getPredicate());
+			if (potentialFacts != null && !potentialFacts.isEmpty()) {
+				continue;
+			}
+
+			// All body variables must occur in the head, otherwise the ground body is not unique to the head.
+			HashSet<VariableTerm> occurringVariablesHead = new HashSet<>(headAtom.toLiteral().getBindingVariables());
+			HashSet<VariableTerm> occurringVariablesBody = new HashSet<>();
+			for (Literal lit : nonGroundRule.getPositiveBody()) {
+				occurringVariablesBody.addAll(lit.getBindingVariables());
+			}
+			occurringVariablesBody.removeAll(occurringVariablesHead);
 			if (occurringVariablesBody.isEmpty()) {
 				uniqueGroundRulePerGroundHead.add(nonGroundRule);
 			}
@@ -772,6 +838,14 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 
 	@Override
 	public Map<Integer, NoGood> getNoGoods(Assignment currentAssignment) {
+		// Session mode: if the program changed since the last grounding, recompute which heads still qualify for a
+		// support nogood (a head that gained a fact or a second defining rule drops out) and refresh the generator
+		// before any instance is ground this shot. Done here — the single grounding entry point — so it covers
+		// bootstrap, fixed rules, and join grounding uniformly. The program is fixed within a shot, so once suffices.
+		if (uniqueHeadSetDirty) {
+			noGoodGenerator.setUniqueGroundRulePerGroundHead(getRulesWithUniqueHead());
+			uniqueHeadSetDirty = false;
+		}
 		// In first call, prepare facts and ground rules.
 		final Map<Integer, NoGood> newNoGoods = fixedRules != null ? bootstrap() : new LinkedHashMap<>();
 

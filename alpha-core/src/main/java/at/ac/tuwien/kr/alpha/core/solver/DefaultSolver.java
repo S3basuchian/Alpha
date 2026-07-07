@@ -88,24 +88,8 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 	private final BranchingHeuristic branchingHeuristic;
 
 	/**
-	 * Experiment flag ({@code -Dalpha.resetVsidsPerShot=true}, off by default): cold-reset the branching
-	 * heuristic's activity at every shot boundary. Tests whether warm-start VSIDS anchoring is what makes
-	 * incremental solving blow up after an edit that invalidates the previous shot's answer set.
-	 */
-	private static final boolean RESET_VSIDS_PER_SHOT = Boolean.getBoolean("alpha.resetVsidsPerShot");
-
-	/**
-	 * Experiment flag ({@code -Dalpha.foundednessResetKeepsVsids=true}, off by default): when set,
-	 * {@link #retractInPlaceKeepSoundLearned(Collection)} keeps warm VSIDS (skips {@code resetActivity()}),
-	 * matching the retract path's default. The foundedness T-reset then only clears the trail + purges the
-	 * foundedness-tainted nogoods, leaving branching activity carried across the shot. Lets us A/B whether the
-	 * VSIDS wipe — rather than the T-clear re-propagation — is what the foundedness reset costs on a workload.
-	 */
-	private static final boolean FOUNDEDNESS_RESET_KEEPS_VSIDS = Boolean.getBoolean("alpha.foundednessResetKeepsVsids");
-
-	/**
 	 * Adaptive cold-restart ({@code -Dalpha.adaptiveVsidsReset=true}, off by default): a domain-independent,
-	 * reactive alternative to {@link #RESET_VSIDS_PER_SHOT}. Warm VSIDS is kept by default; a shot that burns
+	 * reactive within-shot restart. Warm VSIDS is kept during a shot's search; a shot that burns
 	 * an anomalous number of decisions (relative to the recent per-shot baseline) is taken as a sign that the
 	 * carried heuristic is anchored to a now-invalidated model, and the search is restarted <em>cold</em> once
 	 * (backjump to dl 0 + {@link BranchingHeuristic#resetActivity()}). It never fires on the base solve (no
@@ -136,14 +120,11 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 
 	/**
 	 * Set to {@code true} when this shot's search learned a justification (foundedness) nogood — via
-	 * {@link #justifyMbtAndBacktrack()} or {@link #treatConflictAfterClosing(Antecedent)}. Such a nogood
-	 * (and any learned nogood that resolved through it, plus any dl-0 atom it forced) is sound only for the
-	 * program at this shot: adding a fact in a later shot can <em>found</em> a previously-unfounded atom, so
-	 * a surviving "atom is unfounded" nogood or its dl-0 effect would spuriously block the new answer set
-	 * (the dual of the retraction case). The session reads this via
-	 * {@link #hasLearnedJustificationNoGoodThisShot()} and, when set, routes the next monotone reset through
-	 * the conservative clear+reassert ({@link #retractInPlace(Collection)}) instead of the snapshot-reusing
-	 * warm {@link #resetForNewShot()}, so nothing foundedness-derived survives. Reset at each shot boundary.
+	 * {@link #justifyMbtAndBacktrack()} or {@link #treatConflictAfterClosing(Antecedent)}. Such a nogood (and
+	 * any learned nogood that resolved through it) is tagged ENUMERATION, so the unconditional
+	 * {@link NoGoodStore#purgeEnumerationNoGoods()} in {@link #resetForNewShot(Collection)} drops it at the next
+	 * shot boundary regardless of this flag: a monotone shot never carries foundedness-derived nogoods across.
+	 * The flag now only feeds the {@code alpha.diagFixpointSize} diagnostic. Reset at each shot boundary.
 	 */
 	private boolean justificationLearnedThisShot = false;
 	private static class SearchState {
@@ -158,22 +139,20 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 
 	/**
 	 * Set to {@code true} when {@link #prepareForSubsequentAnswerSet()} added an enumeration nogood to the
-	 * store. {@link #resetForNewShot()} reads this to decide whether to invoke
-	 * {@link NoGoodStore#purgeEnumerationNoGoods()} during reset. Cleared again at the end of reset.
+	 * store. The between-shot reset ({@link #resetInPlace}) purges enumeration nogoods unconditionally and
+	 * clears this flag; it is kept for its diagnostic value.
 	 */
 	private boolean enumerationUsed = false;
 
-	// dl-0 hot-start snapshot captured at this shot's first answer set, before any enumeration nogood is
-	// added. {@link #resetForNewShot()} rewinds dl 0 to it between shots — a single rewind that drops the
-	// answer set's closing atoms together with every enumeration-forced/-derived dl-0 atom. Null until the
-	// first answer set of a shot is produced (and stays null for a shot that finds none).
-	private Map<Integer, ThriceTruth> dl0Snapshot;
+	// True once this shot has produced its first answer set. Used only to fold the shot's decision count into
+	// the adaptive cold-restart baseline exactly once per shot. Reset at each shot boundary.
+	private boolean answerSetFoundThisShot;
 
 	/**
 	 * Set to {@code true} when this shot's search terminated in a conflict at decision level 0 — an UNSAT
 	 * proven at the root (an empty nogood, or conflict analysis that resolved to dl 0). Such a shot leaves no
 	 * consistent dl-0 fixpoint and may have short-circuited grounding, so the incremental resets
-	 * ({@link #resetForNewShot()} / {@link #retractInPlace(Collection)}) cannot soundly repair it and the
+	 * ({@link #resetForNewShot(Collection)} / {@link #retractInPlace(Collection)}) cannot soundly repair it and the
 	 * session must rebuild from scratch before the next shot. Contrast search-exhausted UNSAT (conflict only
 	 * after choices, over a consistent dl-0 fixpoint), which the warm resets handle correctly. Reset at each
 	 * shot start; read by the session via {@link #hasEndedInDecisionLevelZeroConflict()}.
@@ -187,15 +166,6 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 	 */
 	public boolean hasEndedInDecisionLevelZeroConflict() {
 		return endedInDecisionLevelZeroConflict;
-	}
-
-	/**
-	 * @return whether the last shot learned a justification (foundedness) nogood (see
-	 *         {@link #justificationLearnedThisShot}). The session uses this to route the next monotone reset
-	 *         through the conservative clear+reassert instead of the snapshot-reusing warm reset.
-	 */
-	public boolean hasLearnedJustificationNoGoodThisShot() {
-		return justificationLearnedThisShot;
 	}
 
 	private final PerformanceLog performanceLog;
@@ -362,142 +332,63 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 	}
 
 	/**
-	 * Resets this solver for a fresh enumeration on (potentially extended) program state. Preserves the
-	 * {@link NoGoodStore}'s structural and learned nogoods plus the branching heuristic's activity scores,
-	 * and the atom-store / grounder coupling.  Discards the choice stack and the {@code dl &gt; 0}
-	 * portion of the assignment by backjumping to decision level 0; if the previous shot added
-	 * enumeration nogoods to the store, those are purged via {@link NoGoodStore#purgeEnumerationNoGoods()}.
-	 * Then dl 0 is cleaned of the previous shot's residue: if that shot produced an answer set, dl 0 is
-	 * rewound to the snapshot captured at its first answer set ({@link #dl0Snapshot}) — a single hot-start
-	 * restore that drops the answer set's closing atoms together with every enumeration-forced/-derived dl-0
-	 * atom; if it produced none (UNSAT), there is no snapshot, so any dl-0 closing atoms left by an UNSAT
-	 * closure are stripped directly via {@link WritableAssignment#unassignClosingAssignmentsAtDecisionLevelZero()}.
-	 * The search-state flags are reset so the next call to {@link #tryAdvance} runs {@link #initializeSearch()}
-	 * again — which pulls any newly-derived nogoods from the grounder and ingests them into the existing store.
+	 * Resets this solver for a fresh monotone (add-only) shot on the extended program state, keeping the live
+	 * solver and its entire nogood store (structural nogoods and their watches are untouched — no re-ingest).
+	 * The whole trail is cleared (T ← ∅), so every ordinary two-watched-literal watch is trivially valid; the
+	 * previous shot's enumeration nogoods (and any foundedness-tainted resolvents, tagged ENUMERATION) are
+	 * purged; the ordinary LEARNT nogoods are kept — they are classical resolvents, entailed by N_s ∪ N_l and
+	 * monotone under add_F/add_C, so they stay sound across an add-only shot. The surviving fact/structural
+	 * units are re-forced at dl 0 and VSIDS activity is reset. The caller passes every surviving unit nogood,
+	 * since the full clear un-forced them all.
 	 *
-	 * <p>Only monotone (add-only) shots reach this reset. Retraction shots go through
-	 * {@link #retractInPlace(Collection)} instead, which additionally clears the trail and drops learned
-	 * nogoods. Learned nogoods and VSIDS are always preserved here.
+	 * <p>Retraction shots go through {@link #retractInPlace(Collection)}, which additionally drops <em>all</em>
+	 * learned nogoods (any may be unsound in the reduced program).
 	 */
-	public void resetForNewShot() {
-		endedInDecisionLevelZeroConflict = false;
-		justificationLearnedThisShot = false;
-		if (assignment.getDecisionLevel() > 0) {
-			choiceManager.backjump(0);
-		}
-		if (enumerationUsed) {
-			// This shot enumerated: detach its enumeration nogoods from the store.
-			store.purgeEnumerationNoGoods();
-			enumerationUsed = false;
-		}
-		if (dl0Snapshot != null) {
-			// This shot found an answer set (single or enumerated): hot-start dl 0 from the snapshot captured
-			// at its first answer set — one rewind that drops the answer set's closing atoms AND every
-			// enumeration-forced/-derived dl-0 atom.
-			assignment.restoreToDl0Snapshot(dl0Snapshot);
-			dl0Snapshot = null;
-		} else {
-			// No answer set this shot (UNSAT): there is no snapshot to restore from, but an UNSAT closure may
-			// still have left dl-0 closing atoms — strip them, else a later fact deriving a closed atom TRUE
-			// would conflict at dl 0 and spuriously report UNSAT.
-			assignment.unassignClosingAssignmentsAtDecisionLevelZero();
-		}
-		if (RESET_VSIDS_PER_SHOT) {
-			branchingHeuristic.resetActivity();
-		}
-		searchState.hasBeenInitialized = false;
-		searchState.isSearchSpaceCompletelyExplored = false;
-		searchState.afterAllAtomsAssigned = false;
+	public void resetForNewShot(Collection<NoGood> survivingUnits) {
+		resetInPlace(survivingUnits, false);
 	}
 
 	/**
-	 * Resets this solver for a fresh shot after a fact retraction, <em>keeping the live solver and its
-	 * entire nogood store</em> (structural nogoods and their watches are untouched — no re-ingest). The
-	 * caller has already pruned the grounder's cumulative unit nogoods; the surviving fact/structural
-	 * units are passed in here.
-	 *
-	 * <p>Steps: (1) backjump to dl 0 and purge the previous shot's enumeration nogoods; (2)
-	 * {@link WritableAssignment#clear() clear the whole trail} — every literal becomes unassigned, so every
-	 * ordinary two-watched-literal watch is trivially valid and the kept structural nogoods stay sound;
-	 * (3) {@link NoGoodStore#dropAllLearnedNoGoods() drop all learned nogoods} (any may be unsound in the
-	 * reduced program — the sound conservative choice, no provenance needed); (4) re-register the choice
-	 * callbacks that {@code clear()} wiped; (5) {@link NoGoodStore#reassertUnits(Collection) re-force the
-	 * surviving units} at dl 0, which re-triggers propagation of their structural consequences on the next
-	 * solve. VSIDS is preserved for free (this is the same solver object) unless {@code resetHeuristicActivity}
-	 * is set.
+	 * Resets this solver for a fresh shot after a fact retraction. As {@link #resetForNewShot(Collection)}, but
+	 * additionally {@link NoGoodStore#dropAllLearnedNoGoods() drops all learned nogoods}: under retraction a
+	 * previously-sound learned resolvent may no longer be entailed, so the conservative sound choice is to drop
+	 * them all (no provenance needed). The caller has already pruned the grounder's cumulative unit nogoods; the
+	 * surviving fact/structural units are passed in here.
 	 */
 	public void retractInPlace(Collection<NoGood> survivingUnits) {
-		retractInPlace(survivingUnits, RESET_VSIDS_PER_SHOT);
+		resetInPlace(survivingUnits, true);
 	}
 
 	/**
-	 * As {@link #retractInPlace(Collection)}, but additionally resets the branching heuristic's activity when
-	 * {@code resetHeuristicActivity} is set. The foundedness-contaminated monotone path passes {@code true}:
-	 * that path fires on a shot whose predecessor learned justification nogoods (e.g. every graph-coloring
-	 * shot), and the carried VSIDS activity is anchored to the previous shot's model — after a structural
-	 * change (a new edge) it mis-guides the search into a multi-minute thrash on an instance a fresh solve
-	 * finishes in milliseconds. Resetting activity there recovers the fresh-solve behaviour; benchmarks that
-	 * never learn justification nogoods keep warm VSIDS and are unaffected.
+	 * The single in-place reset shared by the monotone ({@link #resetForNewShot(Collection)}) and retraction
+	 * ({@link #retractInPlace(Collection)}) shot boundaries. Backjump to dl 0; purge the previous shot's
+	 * enumeration / foundedness-tainted (ENUMERATION-tagged) nogoods while the trail is still populated so their
+	 * dl-0 propagations are undone; {@link WritableAssignment#clear() clear the whole trail} (T ← ∅), after
+	 * which every kept watch is trivially valid; optionally drop all learned nogoods; re-register the choice
+	 * callbacks that {@code clear()} wiped; {@link NoGoodStore#reassertUnits(Collection) re-force the surviving
+	 * units} at dl 0; and reset VSIDS activity. No re-ingest of structural nogoods is needed.
+	 *
+	 * @param dropAllLearned drop every learned nogood (retraction); otherwise keep the sound LEARNT ones
 	 */
-	public void retractInPlace(Collection<NoGood> survivingUnits, boolean resetHeuristicActivity) {
+	private void resetInPlace(Collection<NoGood> survivingUnits, boolean dropAllLearned) {
 		endedInDecisionLevelZeroConflict = false;
 		justificationLearnedThisShot = false;
+		answerSetFoundThisShot = false;
 		if (assignment.getDecisionLevel() > 0) {
 			choiceManager.backjump(0);
 		}
-		// Detach the previous shot's enumeration nogoods while the trail is still populated.
-		if (enumerationUsed) {
-			store.purgeEnumerationNoGoods();
-			enumerationUsed = false;
-		}
-		// Clear the whole trail (also wipes per-atom change callbacks, re-registered by choiceManager.reset).
-		// The pre-retraction dl-0 snapshot describes that now-cleared trail, so drop it — the retraction
-		// shot re-captures a fresh one at its own first answer set.
-		dl0Snapshot = null;
-		assignment.clear();
-		// Drop all learned nogoods — the assignment is already clear, so this only detaches watches/counters.
-		store.dropAllLearnedNoGoods();
-		choiceManager.reset();
-		// Re-force the surviving units at dl 0; propagation of their consequences runs on the next solve.
-		store.reassertUnits(survivingUnits);
-		if (resetHeuristicActivity) {
-			branchingHeuristic.resetActivity();
-		}
-		searchState.hasBeenInitialized = false;
-		searchState.isSearchSpaceCompletelyExplored = false;
-		searchState.afterAllAtomsAssigned = false;
-	}
-
-	/**
-	 * DESIGN (B) EXPERIMENT: like {@link #retractInPlace(Collection, boolean)} (full trail clear T ← ∅ + reset
-	 * VSIDS), but instead of dropping <em>all</em> learned nogoods it drops <em>only the foundedness-tainted
-	 * subset</em> — the justification nogoods (tagged ENUMERATION) and every learned nogood that resolved
-	 * through one (also ENUMERATION via the taint) — via {@link NoGoodStore#purgeEnumerationNoGoods()}, while
-	 * KEEPING the ordinary LEARNT nogoods for cross-shot reuse. Tests whether N_l must be reset wholesale or
-	 * only its non-monotone (foundedness) part. Full T clear makes this need only the nogood-resolution taint,
-	 * not a dl-0 assignment taint.
-	 */
-	public void retractInPlaceKeepSoundLearned(Collection<NoGood> survivingUnits) {
-		endedInDecisionLevelZeroConflict = false;
-		justificationLearnedThisShot = false;
-		if (assignment.getDecisionLevel() > 0) {
-			choiceManager.backjump(0);
-		}
-		// Drop the foundedness-tainted (ENUMERATION-typed) nogoods while the trail is still populated so their
-		// dl-0 propagations are undone. Unconditional (not gated on enumerationUsed): foundedness nogoods are
-		// tagged ENUMERATION and may be present without any actual answer-set enumeration having occurred.
+		// Detach the previous shot's enumeration nogoods (and any foundedness-tainted resolvents, tagged
+		// ENUMERATION) while the trail is still populated so their dl-0 propagations are undone. Unconditional:
+		// a purge with no enumeration nogoods present is a no-op.
 		store.purgeEnumerationNoGoods();
 		enumerationUsed = false;
-		dl0Snapshot = null;
-		assignment.clear();   // T ← ∅
-		// Deliberately DO NOT dropAllLearnedNoGoods: the ordinary LEARNT nogoods are classical resolvents,
-		// entailed by N_s ∪ N_l and monotone under add_F/add_C, so they stay sound. Only the foundedness-tainted
-		// subset was purged above. After the full clear every kept watch is trivially valid.
+		assignment.clear();   // T ← ∅ : every ordinary watch is trivially valid after a full clear
+		if (dropAllLearned) {
+			store.dropAllLearnedNoGoods();
+		}
 		choiceManager.reset();
 		store.reassertUnits(survivingUnits);
-		if (!FOUNDEDNESS_RESET_KEEPS_VSIDS) {
-			branchingHeuristic.resetActivity();
-		}
+		branchingHeuristic.resetActivity();
 		searchState.hasBeenInitialized = false;
 		searchState.isSearchSpaceCompletelyExplored = false;
 		searchState.afterAllAtomsAssigned = false;
@@ -584,11 +475,8 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 	}
 
 	private void provideAnswerSet(Consumer<? super AnswerSet> action) {
-		// Capture the clean dl-0 fixpoint (minus closing atoms) at this shot's first answer set, before any
-		// enumeration nogood is added, so resetForNewShot can hot-start the next shot from it regardless of
-		// how many answer sets the caller pulls — a single findFirst() still leaves a usable snapshot.
-		if (dl0Snapshot == null) {
-			dl0Snapshot = assignment.captureDl0NonClosingSnapshot();
+		if (!answerSetFoundThisShot) {
+			answerSetFoundThisShot = true;
 			// First answer set of this shot: if warm VSIDS carried it through without a cold restart, fold this
 			// shot's decision count into the baseline that calibrates the adaptive cold-restart budget.
 			if (ADAPTIVE_VSIDS_RESET && !cooledThisShot) {
@@ -731,14 +619,8 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 			LOGGER.info("DIAG-FIXPOINT shot#{}: |T| (dl-0 assigned) = {}  ({} non-false / {} false), totalAssigned={}, maxAtomId={}, currentDL={}",
 					diagShotCounter, dl0, dl0nonFalse, dl0 - dl0nonFalse, totalAssigned, maxId, assignment.getDecisionLevel());
 		}
-		// USER PROPOSAL: capture the dl-0 fixpoint T *before* the first foundedness nogood of this shot is
-		// added. At this instant T is purely structural/classical (no foundedness nogood exists yet), hence
-		// foundedness-free transitively — so it is program-monotone and can be carried into the next shot.
-		// (For a shot that never learns a foundedness nogood, provideAnswerSet captures at the first answer set
-		// as before.) The first foundedness nogood always precedes the first answer set, so dl0Snapshot is null
-		// here on the first one.
-		// This foundedness nogood is valid only for the current program; flag the shot so the session does the
-		// conservative reset next shot rather than letting it (or its dl-0 effect) persist unsoundly.
+		// This foundedness nogood is tagged ENUMERATION, so the next shot's unconditional enumeration purge
+		// drops it; flag the shot for the diagnostic only.
 		justificationLearnedThisShot = true;
 		int noGoodID = grounder.register(noGood);
 		Map<Integer, NoGood> obtained = new LinkedHashMap<>();

@@ -109,30 +109,6 @@ public interface WritableAssignment extends Assignment {
 	void unassignManyAtDecisionLevelZero(java.util.Collection<Integer> atomsToUnassign);
 
 	/**
-	 * Reverts every assignment made by {@code closeUnassignedAtoms} at decision level 0. Used by
-	 * {@code DefaultSolver.resetForNewShot} for a shot that produced <em>no</em> answer set (UNSAT): there is
-	 * no answer-set snapshot to restore from, yet an UNSAT closure may leave dl-0 closing atoms that, in the
-	 * next shot, a newly-added fact deriving a closed atom TRUE would conflict with. Shots that found an
-	 * answer set clean up via {@link #restoreToDl0Snapshot} instead.
-	 */
-	void unassignClosingAssignmentsAtDecisionLevelZero();
-
-	/**
-	 * Capture the decision-level-0 assignment (atom -&gt; truth, excluding closing-forced atoms) as a
-	 * hot-start snapshot, taken at a shot's first answer set, before any enumeration nogood is added. See
-	 * {@link #restoreToDl0Snapshot}.
-	 */
-	java.util.Map<Integer, ThriceTruth> captureDl0NonClosingSnapshot();
-
-	/**
-	 * Rewind decision level 0 to a snapshot from {@link #captureDl0NonClosingSnapshot}: un-assign every
-	 * dl-0 atom not in the snapshot (enumeration-forced atoms, closing atoms, atoms derived during
-	 * enumeration). Replaces the enumeration-cleanup cascade — sound because the snapshot is a closed
-	 * set, so no kept atom depends on a dropped one.
-	 */
-	void restoreToDl0Snapshot(java.util.Map<Integer, ThriceTruth> snapshot);
-
-	/**
 	 * Assigns all unassigned atoms to FALSE.
 	 * @return true if any atom was assigned.
 	 */

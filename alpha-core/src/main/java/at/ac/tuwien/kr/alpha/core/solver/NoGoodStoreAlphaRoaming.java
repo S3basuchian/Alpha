@@ -247,8 +247,8 @@ public class NoGoodStoreAlphaRoaming implements NoGoodStore, BinaryNoGoodPropaga
 	@Override
 	public void purgeEnumerationNoGoods() {
 		// Detach the shot's enumeration nogoods from the store's watch lists (multi-ary + binary), and drop
-		// the unary tracking. The dl-0 atoms these nogoods forced are un-assigned by the solver's hot-start
-		// snapshot restore ({@link WritableAssignment#restoreToDl0Snapshot}), so no dependency cascade is
+		// the unary tracking. The dl-0 atoms these nogoods forced are un-assigned by the solver's full trail
+		// clear ({@link WritableAssignment#clear()}) in the between-shot reset, so no dependency cascade is
 		// needed here — that is why this method only touches the store, not the assignment.
 		for (WatchedNoGood wng : new ArrayList<>(enumerationWatchedNoGoods)) {
 			removeFromWatches(wng);

@@ -118,6 +118,19 @@ public class NoGood implements NoGoodInterface, Comparable<NoGood> {
 		return new NoGood(SUPPORT, headLiteral, negateLiteral(bodyRepresentingLiteral));
 	}
 
+	/**
+	 * The same {@code {Tp, F(body)}} support ("only-via"/completion) nogood as {@link #support(int, int)}, but
+	 * tagged {@link Type#ENUMERATION} instead of {@link Type#SUPPORT}. Used in session (incremental) mode: a
+	 * support nogood is non-monotone — a fact or a second defining rule added for {@code p} in a later shot
+	 * gives {@code p} another support and falsifies it — so it must not survive a shot boundary. Tagging it
+	 * ENUMERATION routes it through the same between-shot purge ({@link Type#ENUMERATION} nogoods are dropped by
+	 * {@code NoGoodStore.purgeEnumerationNoGoods}) and the same resolution taint (any learned nogood resolving
+	 * through it becomes ENUMERATION and is purged too) that already handle foundedness nogoods.
+	 */
+	public static NoGood supportEnumeration(int headLiteral, int bodyRepresentingLiteral) {
+		return new NoGood(ENUMERATION, headLiteral, negateLiteral(bodyRepresentingLiteral));
+	}
+
 	public static NoGood fromConstraint(List<Integer> posLiterals, List<Integer> negLiterals) {
 		return new NoGood(addPosNeg(new int[posLiterals.size() + negLiterals.size()], posLiterals, negLiterals, 0));
 	}
