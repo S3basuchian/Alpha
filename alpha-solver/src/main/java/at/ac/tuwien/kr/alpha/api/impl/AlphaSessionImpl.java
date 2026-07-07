@@ -51,6 +51,14 @@ import at.ac.tuwien.kr.alpha.core.solver.SolverFactory;
  */
 public final class AlphaSessionImpl implements AlphaSession {
 
+	// EXPERIMENT toggle: when set, every monotone (add-only) warm shot is routed through the
+	// foundedness-contaminated reset path ({@link DefaultSolver#retractInPlaceKeepSoundLearned}) —
+	// full trail clear T ← ∅, purge foundedness-tainted (ENUMERATION) nogoods, keep the sound LEARNT
+	// nogoods, reset VSIDS — regardless of whether a justification nogood was actually learned this
+	// shot. Off by default (warm {@link DefaultSolver#resetForNewShot} hot-start). Used to A/B the
+	// cost of the conservative T-reset on a given workload.
+	private static final boolean FORCE_FOUNDEDNESS_RESET = Boolean.getBoolean("alpha.session.forceFoundednessReset");
+
 	private final AlphaImpl alpha;
 	private ASPCore2ProgramBuilder programBuilder;
 
@@ -256,6 +264,22 @@ public final class AlphaSessionImpl implements AlphaSession {
 				sessionGrounder.forgetSolverInternalRegistrations(true);
 				((DefaultSolver) liveSolver).retractInPlace(sessionGrounder.survivingUnitNoGoods());
 				retractionThisShot = false;
+			} else if (FORCE_FOUNDEDNESS_RESET || ((DefaultSolver) liveSolver).hasLearnedJustificationNoGoodThisShot()) {
+				// The previous monotone shot learned foundedness (justification) nogoods. Those — and any
+				// learned nogood that resolved through them, and any dl-0 atom they forced (which the warm
+				// reset's snapshot would preserve) — are valid only for that shot's program: a fact added this
+				// shot can found a previously-unfounded atom, so keeping them would spuriously block the new
+				// answer set (dual of the retraction case). Do the same conservative clear+reassert as
+				// retraction so nothing foundedness-derived survives; the grounder/store-structural nogoods
+				// are kept (no re-ground), so this stays far cheaper than a full rebuild. Reset VSIDS too: on
+				// these foundedness-heavy shots (e.g. graph coloring) the carried activity is anchored to the
+				// previous model and, after a structural change, thrashes on instances a fresh solve finishes
+				// in milliseconds.
+				// DESIGN (B): full trail clear T ← ∅, keep the sound LEARNT nogoods, drop only the
+				// foundedness-tainted (ENUMERATION) subset. Forgetting only the enumeration registry entries
+				// (false) matches the store's purge; the kept LEARNT entries stay registered.
+				sessionGrounder.forgetSolverInternalRegistrations(false);
+				((DefaultSolver) liveSolver).retractInPlaceKeepSoundLearned(sessionGrounder.survivingUnitNoGoods());
 			} else {
 				// Monotone reset purges only the previous shot's enumeration nogoods (learned nogoods are
 				// kept); forget just the enumeration registry entries to match.

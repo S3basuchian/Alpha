@@ -772,6 +772,13 @@ public class TrailAssignment implements WritableAssignment, Checkable {
 	}
 
 	@Override
+	public void rewindNewAssignmentsPointer() {
+		// Experiment: make every currently-assigned atom count as "new" again, so the next
+		// getNewPositiveAssignmentsIterator re-reports all positive atoms to the grounder.
+		newAssignmentsIterator = 0;
+	}
+
+	@Override
 	public void setChecksEnabled(boolean checksEnabled) {
 		this.checksEnabled = checksEnabled;
 	}

@@ -39,6 +39,10 @@ public interface WritableAssignment extends Assignment {
 	 */
 	void clear();
 
+	/** Experiment: rewind the "new positive assignments" pointer so all current positives are re-reported. */
+	default void rewindNewAssignmentsPointer() {
+	}
+
 	/**
 	 * Backtracks the most recent decision level.
 	 */

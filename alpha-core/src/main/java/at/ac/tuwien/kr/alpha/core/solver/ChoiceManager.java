@@ -146,6 +146,10 @@ public class ChoiceManager implements Checkable {
 		return choices;
 	}
 
+	public int getNumberOfChoicePoints() {
+		return choicePointInfluenceManager.getNumberOfChoicePoints();
+	}
+
 	public void updateAssignments() {
 		LOGGER.trace("Updating assignments of ChoiceManager.");
 		if (checksEnabled) {

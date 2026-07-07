@@ -17,6 +17,9 @@ import at.ac.tuwien.kr.alpha.core.common.NoGood;
 import at.ac.tuwien.kr.alpha.core.common.NoGoodInterface;
 import at.ac.tuwien.kr.alpha.core.grounder.Grounder;
 import at.ac.tuwien.kr.alpha.core.grounder.NaiveGrounder;
+import at.ac.tuwien.kr.alpha.core.grounder.ProgramAnalyzingGrounder;
+import at.ac.tuwien.kr.alpha.api.programs.atoms.Atom;
+import at.ac.tuwien.kr.alpha.api.programs.literals.Literal;
 
 /**
  * Recording/replaying decorator around {@link NaiveGrounder} that lets a session reuse one grounder across
@@ -38,9 +41,27 @@ import at.ac.tuwien.kr.alpha.core.grounder.NaiveGrounder;
  *       cumulative choice / heads-to-bodies state, so the fresh solver sees everything it needs.</li>
  * </ul>
  */
-final class SessionGrounder implements Grounder {
+final class SessionGrounder implements ProgramAnalyzingGrounder {
 
 	private final NaiveGrounder delegate;
+
+	// Expose the delegate's program-analysis capability so a session-mode DefaultSolver can perform
+	// justification-based learning on after-closing / MBT conflicts (its `grounder instanceof
+	// ProgramAnalyzingGrounder` checks otherwise fail because this wrapper only implemented Grounder).
+	@Override
+	public Set<Literal> justifyAtom(int atomToJustify, Assignment currentAssignment) {
+		return delegate.justifyAtom(atomToJustify, currentAssignment);
+	}
+
+	@Override
+	public boolean isFact(Atom atom) {
+		return delegate.isFact(atom);
+	}
+
+	@Override
+	public at.ac.tuwien.kr.alpha.core.programs.rules.CompiledRule getNonGroundRule(Integer ruleId) {
+		return delegate.getNonGroundRule(ruleId);
+	}
 
 	private final Map<Integer, NoGood> cumulativeNoGoods = new LinkedHashMap<>();
 	private final Map<Integer, Integer> cumulativeChoiceOn = new LinkedHashMap<>();

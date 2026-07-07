@@ -81,4 +81,16 @@ public interface BranchingHeuristic {
 
 	default void growForMaxAtomId(int maxAtomId) {
 	}
+
+	/**
+	 * Reset any accumulated activity/branching-bias state to a fresh (cold) condition. Default no-op.
+	 * Used between multi-shot solves to test/mitigate warm-start heuristic anchoring, where activity
+	 * carried from a previous shot mis-guides the search after an edit that invalidated that shot's model.
+	 */
+	default void resetActivity() {
+	}
+
+	/** Experiment: randomize the variable ordering (see {@link HeapOfActiveAtoms#randomize()}). Default no-op. */
+	default void randomizeActivity() {
+	}
 }

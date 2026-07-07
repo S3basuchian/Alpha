@@ -220,6 +220,21 @@ public class VSIDS implements ActivityBasedBranchingHeuristic {
 	}
 
 	@Override
+	public void resetActivity() {
+		// Cold-reset the warm heuristic: clear accumulated atom activity and sign bias so a new shot does not
+		// inherit branching preferences tuned to a previous (possibly now-invalidated) answer set.
+		heapOfActiveAtoms.reset();
+		Arrays.fill(signBalances, 0);
+	}
+
+	@Override
+	public void randomizeActivity() {
+		// Experiment: random variable ordering (tests whether the incremental atom/heap order is the culprit).
+		heapOfActiveAtoms.randomize();
+		Arrays.fill(signBalances, 0);
+	}
+
+	@Override
 	public void growForMaxAtomId(int maxAtomId) {
 		// Grow arrays only if needed.
 		if (signBalances.length > maxAtomId) {

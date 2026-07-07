@@ -69,6 +69,16 @@ public class ChoiceInfluenceManager implements Checkable {
 		this.assignment = assignment;
 	}
 
+	public int getNumberOfChoicePoints() {
+		int n = 0;
+		for (ChoicePoint cp : influencers) {
+			if (cp != null) {
+				n++;
+			}
+		}
+		return n;
+	}
+
 	void addInformation(Pair<Map<Integer, Integer>, Map<Integer, Integer>> choiceAtoms) {
 		// Assumption: we get all enabler/disabler pairs in one call.
 		Map<Integer, Integer> enablers = choiceAtoms.getLeft();
