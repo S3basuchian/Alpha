@@ -9,11 +9,7 @@
     "mem_limit": 16000,
     "request_cpus": 1,
     "runs": 3,
-    "max_parallel_jobs": 20,
-    "exclusive": true,
     "use_perf": false,
     "postprocess_stdout_regex": "RESULT_SECONDS=([0-9.]+)",
-    "partition": "__PARTITION__",
-    "runsolver_path": "__RUNSOLVER__",
-    "clearcache_path": "__CLEARCACHE__"
+    "partition": "__PARTITION__"
 }

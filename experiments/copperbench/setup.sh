@@ -9,10 +9,9 @@
 # the copperbench <bench>.json config files from the <bench>.json.in templates, baking in the
 # absolute checkout path and the cluster-specific fields.
 #
-# Cluster overrides (env vars, all optional — defaults are copperbench's own defaults):
-#     PARTITION   SLURM partition            (default: broadwell)
-#     RUNSOLVER   path to the runsolver bin  (default: /opt/runsolver)
-#     CLEARCACHE  path to the clearcache bin (default: /opt/clearcache)
+# Cluster override (env var, optional):
+#     PARTITION   SLURM partition (default: broadwell) — pins every run to one CPU type so the
+#                 timings are comparable. runsolver/clearcache use copperbench's own defaults.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,8 +20,6 @@ EXAMPLES="$REPO_ROOT/examples"
 PY="${PYTHON:-python3}"
 
 PARTITION="${PARTITION:-broadwell}"
-RUNSOLVER="${RUNSOLVER:-/opt/runsolver}"
-CLEARCACHE="${CLEARCACHE:-/opt/clearcache}"
 
 echo "==> repo root: $REPO_ROOT"
 
@@ -61,12 +58,10 @@ done
 # coloring: no instance files — the Java driver generates the base graph internally from (V,E,seed).
 
 # 3. Render the copperbench JSON configs from templates.
-echo "==> rendering copperbench configs (partition=$PARTITION, runsolver=$RUNSOLVER) ..."
+echo "==> rendering copperbench configs (partition=$PARTITION) ..."
 for b in groundexp cutedge reach coloring; do
     sed -e "s#__REPO_ROOT__#$REPO_ROOT#g" \
         -e "s#__PARTITION__#$PARTITION#g" \
-        -e "s#__RUNSOLVER__#$RUNSOLVER#g" \
-        -e "s#__CLEARCACHE__#$CLEARCACHE#g" \
         "$HERE/$b.json.in" > "$HERE/$b.json"
     echo "    wrote $HERE/$b.json"
 done

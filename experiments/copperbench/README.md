@@ -32,8 +32,8 @@ excludes JVM/gradle startup. `runsolver` enforces the limits and marks the Timeo
 | memory     | **16 GB** per run |
 | repetitions| **3** runs per (config, instance); the postprocessor reports the **median** |
 | cores      | **1** per run (single-threaded; fair Alpha-vs-clingo comparison) |
-| exclusive  | **true** (whole node per run, for interference-free timing) |
-| max_parallel_jobs | **20** (SLURM array throttle `%20`; raise/lower to suit cluster etiquette) |
+| partition  | **broadwell** (pins every run to one CPU generation so timings are comparable; override with `PARTITION=…`) |
+| use_perf   | **false** (we don't collect perf counters; avoids `perf_event_paranoid` issues) |
 
 Change any of these by editing the `*.json.in` templates and re-running `setup.sh`, or the
 generated `*.json` directly.
@@ -51,8 +51,7 @@ generated `*.json` directly.
 ```bash
 # 0. from the repo root, on the cluster head node
 #    (override cluster fields if they differ from copperbench's defaults)
-PARTITION=broadwell RUNSOLVER=/opt/runsolver CLEARCACHE=/opt/clearcache \
-    bash experiments/copperbench/setup.sh
+PARTITION=broadwell bash experiments/copperbench/setup.sh
 #    -> builds alpha-cli-app (installDist), pre-generates all instances,
 #       renders experiments/copperbench/{groundexp,cutedge,reach,coloring}.json
 
