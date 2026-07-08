@@ -33,6 +33,7 @@ excludes JVM/gradle startup. `runsolver` enforces the limits and marks the Timeo
 | repetitions| **3** runs per (config, instance); the postprocessor reports the **median** |
 | cores      | **1** per run (single-threaded; fair Alpha-vs-clingo comparison) |
 | exclusive  | **true** (whole node per run, for interference-free timing) |
+| max_parallel_jobs | **20** (SLURM array throttle `%20`; raise/lower to suit cluster etiquette) |
 
 Change any of these by editing the `*.json.in` templates and re-running `setup.sh`, or the
 generated `*.json` directly.
