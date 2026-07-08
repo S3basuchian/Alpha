@@ -87,46 +87,13 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 	private final GroundConflictNoGoodLearner learner;
 	private final BranchingHeuristic branchingHeuristic;
 
-	/**
-	 * Adaptive cold-restart ({@code -Dalpha.adaptiveVsidsReset=true}, off by default): a domain-independent,
-	 * reactive within-shot restart. Warm VSIDS is kept during a shot's search; a shot that burns
-	 * an anomalous number of decisions (relative to the recent per-shot baseline) is taken as a sign that the
-	 * carried heuristic is anchored to a now-invalidated model, and the search is restarted <em>cold</em> once
-	 * (backjump to dl 0 + {@link BranchingHeuristic#resetActivity()}). It never fires on the base solve (no
-	 * baseline yet) nor on UNSAT shots (no answer set → no anchoring); the baseline auto-scales, so a
-	 * legitimately hard instance does not false-trigger. Sound/complete: a single cold restart per shot is a
-	 * standard restart (learned nogoods retained) plus an activity wipe, which only reorders branching.
-	 */
-	private static final boolean ADAPTIVE_VSIDS_RESET = Boolean.getBoolean("alpha.adaptiveVsidsReset");
-	/** Experiment: on a cold restart, randomize the variable order instead of zeroing activity (ordering test). */
-	private static final boolean COLD_RESTART_RANDOMIZE = Boolean.getBoolean("alpha.coldRestartRandomize");
-	/** Experiment: allow the cold restart to fire repeatedly within a shot (randomized-restart portfolio). */
-	private static final boolean COLD_RESTART_REPEAT = Boolean.getBoolean("alpha.coldRestartRepeat");
-	/** Minimum decisions a shot may burn before an adaptive cold restart is allowed (absolute floor). */
-	private static final long COOL_MIN_DECISIONS = Long.getLong("alpha.coolMinDecisions", 50_000L);
-	/** A shot is deemed to be thrashing once it exceeds this multiple of the recent per-shot decision baseline. */
-	private static final long COOL_MULTIPLIER = Long.getLong("alpha.coolMultiplier", 30L);
-
-	private long decisionsAtShotStart;
-	private long warmBaselineDecisions;   // EMA of decisions used by clean (non-cooled) shots
-	private int cleanShotsCompleted;      // shots that produced an answer set without needing a cold restart
-	private boolean cooledThisShot;
-
 	private int mbtAtFixpoint;
 	private int conflictsAfterClosing;
 	private final boolean disableJustifications;
-	private boolean disableJustificationAfterClosing = !Boolean.getBoolean("alpha.enableJustificationAfterClosing");	// Keep disabled for now, case not fully worked out yet.
+	// Justification after closing is disabled; the case is not fully worked out yet.
+	private final boolean disableJustificationAfterClosing = true;
 	private final boolean disableNoGoodDeletion;
 
-	/**
-	 * Set to {@code true} when this shot's search learned a justification (foundedness) nogood — via
-	 * {@link #justifyMbtAndBacktrack()} or {@link #treatConflictAfterClosing(Antecedent)}. Such a nogood (and
-	 * any learned nogood that resolved through it) is tagged ENUMERATION, so the unconditional
-	 * {@link NoGoodStore#purgeEnumerationNoGoods()} in {@link #resetForNewShot(Collection)} drops it at the next
-	 * shot boundary regardless of this flag: a monotone shot never carries foundedness-derived nogoods across.
-	 * The flag now only feeds the {@code alpha.diagFixpointSize} diagnostic. Reset at each shot boundary.
-	 */
-	private boolean justificationLearnedThisShot = false;
 	private static class SearchState {
 		boolean hasBeenInitialized;
 		boolean isSearchSpaceCompletelyExplored;
@@ -143,10 +110,6 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 	 * clears this flag; it is kept for its diagnostic value.
 	 */
 	private boolean enumerationUsed = false;
-
-	// True once this shot has produced its first answer set. Used only to fold the shot's decision count into
-	// the adaptive cold-restart baseline exactly once per shot. Reset at each shot boundary.
-	private boolean answerSetFoundThisShot;
 
 	/**
 	 * Set to {@code true} when this shot's search terminated in a conflict at decision level 0 — an UNSAT
@@ -210,125 +173,38 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 			if (Thread.currentThread().isInterrupted()) {
 				throw new SolverAbortedException("Solving aborted: thread interrupted.");
 			}
-			if (ADAPTIVE_VSIDS_RESET && cleanShotsCompleted > 0 && (!cooledThisShot || COLD_RESTART_REPEAT)) {
-				long budget = Math.max(COOL_MIN_DECISIONS, COOL_MULTIPLIER * warmBaselineDecisions);
-				if (choiceManager.getChoices() - decisionsAtShotStart > budget) {
-					coldRestart();
-					if (COLD_RESTART_REPEAT) {
-						decisionsAtShotStart = choiceManager.getChoices(); // re-arm the budget window for the next restart
-					}
-				}
-			}
 			performanceLog.writeIfTimeForLogging(LOGGER);
 			if (searchState.isSearchSpaceCompletelyExplored) {
 				LOGGER.debug("Search space has been fully explored, there are no more answer-sets.");
 				logStats();
 				return false;
 			}
-			boolean diag = Boolean.getBoolean("alpha.diagLoop");
-			long diagT0 = diag ? System.nanoTime() : 0;
 			ConflictCause conflictCause = propagate();
-			if (diag) {
-				diagTProp += System.nanoTime() - diagT0;
-				diagLoopIters++;
-				if (diagLoopIters % 100_000 == 0) {
-					NoGoodCounter cnt = store.getNoGoodCounter();
-					LOGGER.info("DIAG-LOOP shot#{} iters={} confl={} conflAfterClosing={} learnt={} static={} naryNG={} maxBackjumpTo={}",
-							diagShotCounter, diagLoopIters, diagNConfl, conflictsAfterClosing,
-							cnt.getNumberOfNoGoods(at.ac.tuwien.kr.alpha.core.common.NoGoodInterface.Type.LEARNT),
-							cnt.getNumberOfNoGoods(at.ac.tuwien.kr.alpha.core.common.NoGoodInterface.Type.STATIC),
-							cnt.getNumberOfNAryNoGoods(), diagMaxBackjumpTarget);
-				}
-			}
-			long diagT1 = diag ? System.nanoTime() : 0;
 			if (conflictCause != null) {
 				LOGGER.debug("Conflict encountered, analyzing conflict.");
 				learnFromConflict(conflictCause);
-				if (diag) { diagNConfl++; }
 			} else if (assignment.didChange()) {
 				LOGGER.debug("Updating grounder with new assignments and (potentially) obtaining new NoGoods.");
-				if (Boolean.getBoolean("alpha.continuousReReport")) {
-					// Experiment: re-feed ALL positive atoms to the grounder each step (not just newly-assigned),
-					// to test whether the "newly-added only" feeding is why constraints for the current colouring
-					// are never grounded.
-					assignment.rewindNewAssignmentsPointer();
-				}
 				grounder.updateAssignment(assignment.getNewPositiveAssignmentsIterator());
 				getNoGoodsFromGrounderAndIngest();
-				if (diag) { diagNGround++; }
 			} else if (choose()) {
 				LOGGER.debug("Did choice.");
-				if (diag) { diagNChoose++; }
 			} else if (close()) {
 				LOGGER.debug("Closed unassigned known atoms (assigning FALSE).");
-				if (diag) { diagNClose++; }
 			} else if (assignment.getMBTCount() == 0) {
 				provideAnswerSet(action);
 				return true;
 			} else {
 				backtrackFromMBTsRemaining();
-				if (diag) { diagNMbt++; }
 			}
-			if (diag) { diagTOther += System.nanoTime() - diagT1; }
 		}
 	}
-
-	private int diagShotCounter = 0;
-	private int diagChoiceCount = 0;
-	private long diagConflictCount = 0;
-	private int diagMaxBackjumpTarget = 0;
-	private long diagBackjumpTargetSum = 0;
-	private long diagDlBeforeSum = 0;
-	private long diagLoopIters, diagTProp, diagTOther, diagNConfl, diagNGround, diagNChoose, diagNClose, diagNMbt;
 
 	private void initializeSearch() {
 		// Initially, get NoGoods from grounder.
 		performanceLog.initialize();
-		if (Boolean.getBoolean("alpha.reReportAllPositive")) {
-			// Experiment: re-feed ALL currently-positive atoms to the grounder (not just those newly assigned
-			// this shot), to test whether the persistent hot-start colouring's constraints go ungrounded
-			// because those atoms were already reported to the grounder in a prior shot.
-			assignment.rewindNewAssignmentsPointer();
-			grounder.updateAssignment(assignment.getNewPositiveAssignmentsIterator());
-		}
 		getNoGoodsFromGrounderAndIngest();
-		diagShotCounter++;
-		diagChoiceCount = 0;
-		diagConflictCount = 0;
-		diagMaxBackjumpTarget = 0;
-		diagBackjumpTargetSum = 0;
-		diagDlBeforeSum = 0;
-		diagLoopIters = diagTProp = diagTOther = diagNConfl = diagNGround = diagNChoose = diagNClose = diagNMbt = 0;
-		if (Boolean.getBoolean("alpha.diagShotState")) {
-			NoGoodCounter c = store.getNoGoodCounter();
-			LOGGER.info("DIAG shot#{} solveStart: atoms={} choicePoints={} unaryNG={} binaryNG={} naryNG={}",
-					diagShotCounter, atomStore.getMaxAtomId(), choiceManager.getNumberOfChoicePoints(),
-					c.getNumberOfUnaryNoGoods(), c.getNumberOfBinaryNoGoods(), c.getNumberOfNAryNoGoods());
-		}
 		searchState.hasBeenInitialized = true;
-		// Snapshot the decision counter for this shot's adaptive cold-restart budget.
-		decisionsAtShotStart = choiceManager.getChoices();
-		cooledThisShot = false;
-	}
-
-	/**
-	 * Restart the current shot's search from decision level 0 with a cold branching heuristic: unwind all
-	 * choices and wipe accumulated activity, so a warm start anchored to a now-invalidated model stops
-	 * mis-guiding the search. Learned nogoods are retained (this is a normal restart), and it happens at most
-	 * once per shot, so soundness and completeness are preserved.
-	 */
-	private void coldRestart() {
-		LOGGER.debug("Adaptive cold restart: shot exceeded decision budget, wiping heuristic activity.");
-		if (assignment.getDecisionLevel() > 0) {
-			choiceManager.backjump(0);
-		}
-		if (COLD_RESTART_RANDOMIZE) {
-			branchingHeuristic.randomizeActivity();
-		} else {
-			branchingHeuristic.resetActivity();
-		}
-		searchState.afterAllAtomsAssigned = false;
-		cooledThisShot = true;
 	}
 
 	/**
@@ -372,8 +248,6 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 	 */
 	private void resetInPlace(Collection<NoGood> survivingUnits, boolean dropAllLearned) {
 		endedInDecisionLevelZeroConflict = false;
-		justificationLearnedThisShot = false;
-		answerSetFoundThisShot = false;
 		if (assignment.getDecisionLevel() > 0) {
 			choiceManager.backjump(0);
 		}
@@ -423,21 +297,8 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 		}
 	}
 
-	private static final java.util.concurrent.atomic.AtomicInteger DIAG_SESSION_COUNTER = new java.util.concurrent.atomic.AtomicInteger();
-	private final int diagSessionId = DIAG_SESSION_COUNTER.getAndIncrement();
-
 	private void getNoGoodsFromGrounderAndIngest() {
 		Map<Integer, NoGood> obtained = grounder.getNoGoods(assignment);
-		if (Boolean.getBoolean("alpha.diagNoGoods")) {
-			for (NoGood ng : obtained.values()) {
-				java.util.List<String> lits = new java.util.ArrayList<>();
-				for (int lit : ng) {
-					lits.add(atomStore.literalToString(lit));
-				}
-				java.util.Collections.sort(lits);
-				LOGGER.info("DIAG-NG s={} {}", diagSessionId, String.join("|", lits));
-			}
-		}
 		if (!ingest(obtained)) {
 			searchState.isSearchSpaceCompletelyExplored = true;
 		}
@@ -475,21 +336,6 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 	}
 
 	private void provideAnswerSet(Consumer<? super AnswerSet> action) {
-		if (!answerSetFoundThisShot) {
-			answerSetFoundThisShot = true;
-			// First answer set of this shot: if warm VSIDS carried it through without a cold restart, fold this
-			// shot's decision count into the baseline that calibrates the adaptive cold-restart budget.
-			if (ADAPTIVE_VSIDS_RESET && !cooledThisShot) {
-				long used = choiceManager.getChoices() - decisionsAtShotStart;
-				warmBaselineDecisions = warmBaselineDecisions == 0 ? used : (warmBaselineDecisions * 3 + used) / 4;
-				cleanShotsCompleted++;
-			}
-		}
-		if (Boolean.getBoolean("alpha.diagShotState")) {
-			LOGGER.info("DIAG shot#{} SOLVED: choicePoints={} naryNG={} decisionsThisShot={}", diagShotCounter,
-					choiceManager.getNumberOfChoicePoints(), store.getNoGoodCounter().getNumberOfNAryNoGoods(),
-					choiceManager.getChoices() - decisionsAtShotStart);
-		}
 		// NOTE: If we would do optimization, we would now have a guaranteed upper bound.
 		AnswerSet as = translate(assignment.getTrueAssignments());
 		LOGGER.debug("Answer-Set found: {}", as);
@@ -548,23 +394,6 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 			throw oops("Did not learn new NoGood from conflict.");
 		}
 
-		if (Boolean.getBoolean("alpha.diagChoices")) {
-			diagConflictCount++;
-			int dlBefore = assignment.getDecisionLevel();
-			if (analysisResult.backjumpLevel > diagMaxBackjumpTarget) {
-				diagMaxBackjumpTarget = analysisResult.backjumpLevel;
-			}
-			diagBackjumpTargetSum += analysisResult.backjumpLevel;
-			diagDlBeforeSum += dlBefore;
-			if (diagConflictCount <= 40) {
-				LOGGER.info("DIAG-CONFLICT shot#{} #{} dlBefore={} backjumpTo={} lbd~{}", diagShotCounter,
-						diagConflictCount, dlBefore, analysisResult.backjumpLevel, analysisResult.learnedNoGood.size());
-			} else if (diagConflictCount % 20000 == 0) {
-				LOGGER.info("DIAG-CONFLICT-SUMMARY shot#{} conflicts={} avgDlBefore={} avgBackjumpTo={} maxBackjumpTo={}",
-						diagShotCounter, diagConflictCount, diagDlBeforeSum / diagConflictCount,
-						diagBackjumpTargetSum / diagConflictCount, diagMaxBackjumpTarget);
-			}
-		}
 		choiceManager.backjump(analysisResult.backjumpLevel);
 		NoGood learnedNoGood = analysisResult.learnedNoGood;
 		if (analysisResult.enumerationDerived) {
@@ -597,31 +426,6 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 		Set<Literal> reasonsForUnjustified = analyzingGrounder.justifyAtom(atomToJustify, assignment);
 		NoGood noGood = noGoodFromJustificationReasons(atomToJustify, reasonsForUnjustified);
 
-		// DIAG (alpha.diagFixpointSize): report the size of the dl-0 fixpoint T at the moment the FIRST
-		// unfoundedness nogood of this shot is about to be created — i.e. how much of T is pure structural
-		// propagation before any foundedness reasoning contributes to it.
-		if (!justificationLearnedThisShot && Boolean.getBoolean("alpha.diagFixpointSize")) {
-			int dl0 = 0, dl0nonFalse = 0, totalAssigned = 0;
-			int maxId = atomStore.getMaxAtomId();
-			for (int a = 1; a <= maxId; a++) {
-				ThriceTruth t = assignment.getTruth(a);
-				if (t == null) {
-					continue;
-				}
-				totalAssigned++;
-				if (assignment.getWeakDecisionLevel(a) == 0) {
-					dl0++;
-					if (t != ThriceTruth.FALSE) {
-						dl0nonFalse++;
-					}
-				}
-			}
-			LOGGER.info("DIAG-FIXPOINT shot#{}: |T| (dl-0 assigned) = {}  ({} non-false / {} false), totalAssigned={}, maxAtomId={}, currentDL={}",
-					diagShotCounter, dl0, dl0nonFalse, dl0 - dl0nonFalse, totalAssigned, maxId, assignment.getDecisionLevel());
-		}
-		// This foundedness nogood is tagged ENUMERATION, so the next shot's unconditional enumeration purge
-		// drops it; flag the shot for the diagnostic only.
-		justificationLearnedThisShot = true;
 		int noGoodID = grounder.register(noGood);
 		Map<Integer, NoGood> obtained = new LinkedHashMap<>();
 		obtained.put(noGoodID, noGood);
@@ -711,8 +515,6 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 			LOGGER.debug("Searching for justification(s) of {} / {}", toJustify, atomStore.atomToString(atomOf(literalToJustify)));
 			Set<Literal> reasonsForUnjustified = analyzingGrounder.justifyAtom(atomOf(literalToJustify), assignment);
 			NoGood noGood = noGoodFromJustificationReasons(atomOf(literalToJustify), reasonsForUnjustified);
-			// Foundedness nogood — see justifyMbtAndBacktrack: flag the shot for the conservative reset.
-			justificationLearnedThisShot = true;
 			int noGoodID = grounder.register(noGood);
 			obtained.put(noGoodID, noGood);
 			LOGGER.debug("Learned NoGood is: {}", atomStore.noGoodToString(noGood));
@@ -836,11 +638,6 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 			LOGGER.debug("Branching heuristic chose literal {}", atomStore.literalToString(literal));
 		}
 
-		if (Boolean.getBoolean("alpha.diagChoices") && diagChoiceCount < 40) {
-			diagChoiceCount++;
-			LOGGER.info("DIAG-CHOICE shot#{} #{} dl={} lit={}", diagShotCounter, diagChoiceCount,
-					assignment.getDecisionLevel(), atomStore.literalToString(literal));
-		}
 		choiceManager.choose(new Choice(literal, false));
 		return true;
 	}

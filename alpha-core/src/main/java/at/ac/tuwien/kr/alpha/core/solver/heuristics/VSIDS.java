@@ -228,13 +228,6 @@ public class VSIDS implements ActivityBasedBranchingHeuristic {
 	}
 
 	@Override
-	public void randomizeActivity() {
-		// Experiment: random variable ordering (tests whether the incremental atom/heap order is the culprit).
-		heapOfActiveAtoms.randomize();
-		Arrays.fill(signBalances, 0);
-	}
-
-	@Override
 	public void growForMaxAtomId(int maxAtomId) {
 		// Grow arrays only if needed.
 		if (signBalances.length > maxAtomId) {

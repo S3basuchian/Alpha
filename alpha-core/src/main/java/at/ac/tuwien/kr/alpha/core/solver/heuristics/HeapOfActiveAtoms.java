@@ -97,28 +97,6 @@ public class HeapOfActiveAtoms {
 	}
 
 	/**
-	 * Experiment: assign uniformly-random activity scores and rebuild the heap so branching picks atoms in a
-	 * random variable order (rather than the accumulated atom-ID/insertion order). Used to test whether the
-	 * incremental variable ordering is what makes a warm re-solve blow up at the phase transition.
-	 */
-	public void randomize() {
-		java.util.concurrent.ThreadLocalRandom rnd = java.util.concurrent.ThreadLocalRandom.current();
-		for (int a = 1; a < activityScores.length; a++) {
-			activityScores[a] = rnd.nextDouble();
-		}
-		Arrays.fill(incrementedActivityScores, false);
-		currentActivityIncrement = 1.0;
-		stepsSinceLastDecay = 0;
-		numberOfNormalizations = 0;
-		java.util.List<Integer> atoms = new java.util.ArrayList<>();
-		Integer a;
-		while ((a = heap.poll()) != null) {
-			atoms.add(a);
-		}
-		heap.addAll(atoms);
-	}
-
-	/**
 	 * Gets the number of steps after which activity scores are decayed.
 	 */
 	public int getDecayPeriod() {

@@ -89,8 +89,4 @@ public interface BranchingHeuristic {
 	 */
 	default void resetActivity() {
 	}
-
-	/** Experiment: randomize the variable ordering (see {@link HeapOfActiveAtoms#randomize()}). Default no-op. */
-	default void randomizeActivity() {
-	}
 }

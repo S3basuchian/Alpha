@@ -95,13 +95,6 @@ public class ChainedBranchingHeuristics implements BranchingHeuristic {
 		}
 	}
 
-	@Override
-	public void randomizeActivity() {
-		for (BranchingHeuristic element : chain) {
-			element.randomizeActivity();
-		}
-	}
-
 	public void add(BranchingHeuristic element) {
 		if (chain.contains(element)) {
 			throw oops("Cycle detected in chain of branching heuristics");
