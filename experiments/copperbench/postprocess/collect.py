@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""Collect copperbench results for the AlphaInc incremental benchmarks into a CSV and the
+paper's four LaTeX tables.
+
+Usage (from wherever the copperbench <name>/ output folders live — normally the repo root):
+    python3 experiments/copperbench/postprocess/collect.py [--results-dir .] [BENCH ...]
+
+with BENCH in {groundexp, cutedge, reach, coloring} (default: all four). For each benchmark it
+reads every <name>/<config>/<instance>/run*/ directory, extracts the solver's self-reported
+overall runtime (the `RESULT_SECONDS=` line the wrappers print — the same "overall runtime"
+the paper reports, excluding JVM/gradle startup), takes the median across the repeated runs,
+and classifies missing results as Timeout / Memout from the runsolver watcher output.
+
+Outputs (into the results dir):
+    results_long.csv   one row per (benchmark, config, instance, run): seconds / status
+    results_wide.csv   median per (benchmark, instance) across the four solver columns
+    tables.tex         the four tables, in the paper's shape, ready to paste
+"""
+import argparse
+import csv
+import os
+import re
+import statistics
+import sys
+from glob import glob
+
+CONFIG_COLS = ["alpha-mss", "alpha-rebuilt", "clingo-rebuilt", "clingo-mss"]
+COL_HEADER = {"alpha-mss": "Alpha MSS", "alpha-rebuilt": "Alpha Rebuilt",
+              "clingo-rebuilt": "clingo Rebuilt", "clingo-mss": "clingo MSS"}
+
+# Per-benchmark row spec: ordered (instance_key, display_label, extra_col_or_None).
+# instance_key matches the RESULT_INSTANCE the wrapper prints.
+SPEC = {
+    "groundexp": {
+        "rows": [("8", "8", "3/4"), ("10", "10", "3/4"), ("12", "12", "3/4"),
+                 ("14", "14", "3/4"), ("16", "16", "3/4"), ("18", "18", "3/4"),
+                 ("20", "20", "3/4"), ("500", "500", "5/256"), ("1000", "1000", "5/512")],
+        "row_head": r"$|\mathit{dom}|$", "extra_head": "Shots",
+        "caption": "Ground explosion benchmark results.", "label": "tab:groundexp",
+    },
+    "cutedge": {
+        "rows": [("100-30", "100/30", None), ("100-50", "100/50", None),
+                 ("200-30", "200/30", None), ("200-50", "200/50", None),
+                 ("300-10", "300/10", None), ("300-30", "300/30", None),
+                 ("500-10", "500/10", None), ("500-30", "500/30", None),
+                 ("500-50", "500/50", None)],
+        "row_head": r"$|V|/E_\%$", "extra_head": None,
+        "caption": "Cutedge benchmark results.", "label": "tab:cutedge",
+    },
+    "reach": {
+        "rows": [("1000-4", "1000/4", None), ("1000-8", "1000/8", None),
+                 ("10000-2", "10000/2", None), ("10000-4", "10000/4", None),
+                 ("10000-8", "10000/8", None)],
+        "row_head": r"$|V|/E_{mult}$", "extra_head": None,
+        "caption": "Reachability benchmark results.", "label": "tab:reach",
+    },
+    "coloring": {
+        "rows": [("10-40", r"10/40$^{\dagger}$", None), ("20-80", "20/80", None),
+                 ("30-120", "30/120", None), ("40-160", "40/160", None),
+                 ("50-200", "50/200", None), ("100-400", "100/400", None),
+                 ("400-1600", "400/1600", None), ("1000-4000", "1000/4000", None)],
+        "row_head": r"$|V|/|E|$", "extra_head": None,
+        "caption": "Graph $5$-coloring benchmark results.", "label": "tab:coloring",
+    },
+}
+
+RE_KV = {k: re.compile(rf"^RESULT_{k}=(.*)$", re.M)
+         for k in ("BENCH", "CONFIG", "INSTANCE", "SECONDS")}
+
+# runsolver / solver failure markers -> status classification.
+TIMEOUT_MARKERS = ("Maximum wall clock time exceeded", "Maximum CPU time exceeded",
+                   "Maximum wall-clock time exceeded", "TIMEOUT", "time limit")
+MEMOUT_MARKERS = ("Maximum VSize exceeded", "Maximum memory exceeded", "out of memory",
+                  "OutOfMemoryError", "std::bad_alloc", "bad_alloc", "MEMOUT",
+                  "Cannot allocate memory")
+
+
+def _read(path):
+    try:
+        with open(path, "r", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def classify_failure(run_dir):
+    """Scan every file in the run dir (besides the parsed stdout) for a timeout/memout marker."""
+    blob = ""
+    for p in glob(os.path.join(run_dir, "*")):
+        if os.path.isfile(p):
+            blob += _read(p)
+    for m in MEMOUT_MARKERS:
+        if m in blob:
+            return "Memout"
+    for m in TIMEOUT_MARKERS:
+        if m in blob:
+            return "Timeout"
+    return "err"
+
+
+def parse_run(run_dir):
+    """Return (config, instance, seconds_or_None, status) for one run<k>/ directory."""
+    stdout = _read(os.path.join(run_dir, "stdout.log"))
+    cfg = RE_KV["CONFIG"].search(stdout)
+    inst = RE_KV["INSTANCE"].search(stdout)
+    secs = RE_KV["SECONDS"].search(stdout)
+    config = cfg.group(1).strip() if cfg else None
+    instance = inst.group(1).strip() if inst else None
+    if secs:
+        return config, instance, float(secs.group(1)), "ok"
+    return config, instance, None, classify_failure(run_dir)
+
+
+def collect_benchmark(results_dir, bench):
+    """{(config, instance): {'secs': [floats], 'status': [strs]}} over all runs."""
+    agg = {}
+    for stdout_path in glob(os.path.join(results_dir, bench, "**", "run*", "stdout.log"),
+                            recursive=True):
+        run_dir = os.path.dirname(stdout_path)
+        config, instance, secs, status = parse_run(run_dir)
+        if config is None or instance is None:
+            print(f"  warn: could not identify {run_dir} (no RESULT_ lines)", file=sys.stderr)
+            continue
+        d = agg.setdefault((config, instance), {"secs": [], "status": [], "runs": []})
+        d["runs"].append(run_dir)
+        d["status"].append(status)
+        if secs is not None:
+            d["secs"].append(secs)
+    return agg
+
+
+def cell(agg, config, instance):
+    """Median seconds string, or a Timeout/Memout/n-a label, for one table cell."""
+    d = agg.get((config, instance))
+    if d is None:
+        return None  # config not run for this benchmark (e.g. coloring clingo-mss)
+    if d["secs"]:
+        return f"{statistics.median(d['secs']):.2f}"
+    # No successful run: report the failure kind (prefer Memout, then Timeout).
+    if "Memout" in d["status"]:
+        return "Memout"
+    if "Timeout" in d["status"]:
+        return "Timeout"
+    return "err"
+
+
+def latex_table(bench, agg):
+    s = SPEC[bench]
+    has_extra = s["extra_head"] is not None
+    # Column format: row-head [+ extra] + 4 numeric columns.
+    colfmt = "r" + ("l" if has_extra else "") + "rrrr"
+    span_start = 3 if has_extra else 2
+    out = []
+    out.append(r"\begin{table}[t]")
+    out.append(r"  \centering")
+    out.append(r"  \small")
+    out.append(rf"  \caption{{{s['caption']}}}")
+    out.append(rf"  \label{{{s['label']}}}")
+    out.append(rf"  \begin{{tabular}}{{{colfmt}}}")
+    out.append(r"    \toprule")
+    lead = "    " + ("& " if not has_extra else "& & ")
+    out.append(lead + r"\multicolumn{2}{c}{Alpha} & \multicolumn{2}{c}{clingo} \\")
+    out.append(rf"    \cmidrule(lr){{{span_start}-{span_start+1}}}")
+    out.append(rf"    \cmidrule(lr){{{span_start+2}-{span_start+3}}}")
+    head = f"    {s['row_head']} & "
+    if has_extra:
+        head += f"{s['extra_head']} & "
+    head += "MSS & Rebuilt & Rebuilt & MSS \\\\"
+    out.append(head)
+    out.append(r"    \midrule")
+    for key, disp, extra in s["rows"]:
+        cells = [cell(agg, c, key) for c in CONFIG_COLS]
+        cells = ["{--}" if c is None else c for c in cells]
+        row = f"    {disp} & "
+        if has_extra:
+            row += f"{extra} & "
+        row += " & ".join(cells) + r" \\"
+        out.append(row)
+    out.append(r"    \bottomrule")
+    out.append(r"  \end{tabular}")
+    if bench == "coloring":
+        out.append(r"  \vspace{2pt}")
+        out.append(r"  {\footnotesize $^{\dagger}$ UNSAT on every shot}")
+    out.append(r"\end{table}")
+    return "\n".join(out)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("benches", nargs="*", default=list(SPEC), help="benchmarks (default: all)")
+    ap.add_argument("--results-dir", default=".", help="dir holding the copperbench <name>/ folders")
+    args = ap.parse_args()
+    benches = args.benches or list(SPEC)
+
+    long_rows, wide_rows, tex = [], [], []
+    for bench in benches:
+        if bench not in SPEC:
+            print(f"skip unknown benchmark {bench}", file=sys.stderr)
+            continue
+        agg = collect_benchmark(args.results_dir, bench)
+        if not agg:
+            print(f"warn: no runs found for {bench} under {args.results_dir}", file=sys.stderr)
+        for (config, instance), d in sorted(agg.items()):
+            for i, rd in enumerate(d["runs"]):
+                sv = d["secs"][i] if i < len(d["secs"]) else ""
+                long_rows.append([bench, config, instance, i + 1, sv, d["status"][i], rd])
+        for key, disp, _ in SPEC[bench]["rows"]:
+            wide_rows.append([bench, disp] + [cell(agg, c, key) or "" for c in CONFIG_COLS])
+        tex.append(latex_table(bench, agg))
+
+    outdir = args.results_dir
+    with open(os.path.join(outdir, "results_long.csv"), "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["benchmark", "config", "instance", "run", "seconds", "status", "run_dir"])
+        w.writerows(long_rows)
+    with open(os.path.join(outdir, "results_wide.csv"), "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["benchmark", "instance"] + [COL_HEADER[c] for c in CONFIG_COLS])
+        w.writerows(wide_rows)
+    with open(os.path.join(outdir, "tables.tex"), "w") as fh:
+        fh.write("\n\n".join(tex) + "\n")
+
+    print(f"wrote {os.path.join(outdir, 'results_long.csv')}  ({len(long_rows)} runs)")
+    print(f"wrote {os.path.join(outdir, 'results_wide.csv')}  ({len(wide_rows)} rows)")
+    print(f"wrote {os.path.join(outdir, 'tables.tex')}  ({len(tex)} tables)")
+
+
+if __name__ == "__main__":
+    main()

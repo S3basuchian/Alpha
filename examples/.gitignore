@@ -1,0 +1,5 @@
+# Benchmark instances are regenerated deterministically by
+# experiments/copperbench/setup.sh (and the bench-*-sweep.sh scripts), so they are
+# not committed — a fresh checkout regenerates byte-identical inputs.
+*/instances/
+*/__pycache__/

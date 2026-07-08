@@ -1,0 +1,13 @@
+# Rendered by setup.sh — contains machine-specific absolute paths. Commit the *.json.in
+# templates, not the rendered configs.
+*.json
+!*.json.in
+
+# copperbench output / postprocessor artifacts, if a run is launched from inside this dir.
+groundexp/
+cutedge/
+reach/
+coloring/
+results_long.csv
+results_wide.csv
+tables.tex
