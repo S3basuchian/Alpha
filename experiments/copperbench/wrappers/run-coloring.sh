@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Graph 5-colouring (rotating mixed edits) copperbench wrapper — Table 4.
 #
-#   bash run-coloring.sh <config> <V> <E>
+#   bash run-coloring.sh <config> <V> <E> <seed>
 #     <config> : alpha-mss | alpha-rebuilt | clingo-rebuilt | clingo-mss
-#     <V> <E>  : vertices / edges of the random base graph (|E| = 4|V|)
+#     <V> <E>  : vertices / edges of the random base graph (|E| = 4|V|)    <seed> : sample seed
 #
-# 20 shots, seed 42, rotation = mix (grow / add-edge / retract / constrain). The Alpha driver
+# 20 shots, per-sample seed (4th arg), rotation = mix (grow / add-edge / retract / constrain). The Alpha driver
 # generates the base graph internally (JavaRandom) and records the model-dependent edit stream;
 # clingo-rebuilt solves each shot's full program dump from scratch, clingo-mss replays the same
 # per-shot edits incrementally against one long-lived clingo Control.
@@ -15,11 +15,11 @@ source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 CONFIG="${1:?config token required}"
 V="${2:?vertex count required}"
 E="${3:?edge count required}"
-announce coloring "$V-$E"
+SEED="${4:?sample seed required}"
+announce coloring "$V-$E-s$SEED"
 
 CO="$EXAMPLES/coloring"
 SHOTS="${SHOTS:-20}"
-SEED="${SEED:-42}"
 ROTATION="${ROTATION:-mix}"
 MAIN="IncrementalColoringBenchmark"
 

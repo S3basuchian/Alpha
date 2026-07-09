@@ -23,12 +23,13 @@ EXAMPLES="$REPO_ROOT/examples"
 # Built Alpha classpath (produced by `./gradlew :alpha-cli-app:installDist`, run by setup.sh).
 INSTALL_LIB="$REPO_ROOT/alpha-cli-app/build/install/alpha-cli-app/lib/*"
 
-# JVM options. Heap is generous but well under the 16 GB runsolver cap so a genuine
-# blow-up is caught by runsolver (Memout) rather than an early JVM OutOfMemoryError.
-# Alpha's lazy grounding keeps the footprint small; the paper's placeholder numbers were
-# obtained at -Xmx3500m, so 8g does not change behaviour. Override via JVM_XMX if needed.
-JVM_XMX="${JVM_XMX:-8g}"
-JVM_OPTS="-XX:MaxRAM=16000M -Xmx${JVM_XMX}"
+# JVM options. The Java heap is sized to use the full node memory: -Xmx is generous but kept a few
+# GB under the 64 GB runsolver mem cap (-XX:MaxRAM reflects the node RAM) so a genuine blow-up is
+# caught by runsolver (Memout) rather than an early JVM OutOfMemoryError — collect.py classifies
+# both as Memout. The headroom also leaves room for JVM non-heap/native and, in the clingo configs,
+# the clingo subprocess. Override via JVM_XMX if needed.
+JVM_XMX="${JVM_XMX:-60g}"
+JVM_OPTS="-XX:MaxRAM=64000M -Xmx${JVM_XMX}"
 
 # clingo binary + python interpreter (override on clusters with module-loaded tools).
 CLINGO="${CLINGO:-clingo}"

@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
 # Reachability (edge-streaming from empty) copperbench wrapper — Table 3.
 #
-#   bash run-reach.sh <config> <V> <Emult>
+#   bash run-reach.sh <config> <V> <Emult> <seed>
 #     <config> : alpha-mss | alpha-rebuilt | clingo-rebuilt | clingo-mss
-#     <V>      : vertices    <Emult> : edge multiplier (|E| = V * Emult)
+#     <V>      : vertices    <Emult> : edge multiplier (|E| = V * Emult)   <seed> : sample seed
 #
 # 5 equally-sized shots (paper Table 3), single-source reachable/1 encoding. The full edge
 # set is streamed from an initially empty graph. Random graph is generated deterministically
-# (seed 0) by gen-random-graph.py — the same instances the sweep grid uses.
+# from the per-sample seed (4th arg) by gen-random-graph.py.
 set -u
 source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 
 CONFIG="${1:?config token required}"
 V="${2:?vertex count required}"
 EMULT="${3:?edge multiplier required}"
+SEED="${4:?sample seed required}"
 E=$(( V * EMULT ))
-announce reach "$V-$EMULT"
+announce reach "$V-$EMULT-s$SEED"
 
 RE="$EXAMPLES/reach"
 ENCODING="$RE/encoding.lp"
-EDGES="$RE/instances/edges-rand-v$V-e$E.lp"
+EDGES="$RE/instances/edges-rand-v$V-e$E-s$SEED.lp"
 SHOTS="${SHOTS:-5}"
 CAP="${MSS_CAP:-4000000}"          # clingo-MSS viability cap: |V|^2 <= CAP (10000-node -> not viable)
-SEED="${SEED:-0}"
 MAIN="IncrementalReachBenchmark"
 
 [[ -f "$EDGES" ]] || { mkdir -p "$RE/instances"; "$PYTHON" "$RE/gen-random-graph.py" --vertices "$V" --edges "$E" --seed "$SEED" > "$EDGES"; }

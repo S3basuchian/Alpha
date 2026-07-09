@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Ground-explosion (constraint-streaming) copperbench wrapper — Table 1.
 #
-#   bash run-groundexp.sh <config> <domSize>
+#   bash run-groundexp.sh <config> <domSize> <seed>
 #     <config>  : alpha-mss | alpha-rebuilt | clingo-rebuilt | clingo-mss
-#     <domSize> : |dom| (8 10 12 14 16 18 20 500 1000)
+#     <domSize> : |dom| (8 10 12 14 16 18 20 500 1000)   <seed> : sample seed (permutes the forbid order)
 #
-# Per-size forbid schedule (paper "X/Y" notation), order = scatter (seed 42), n = 10 answer
+# Per-size forbid schedule (paper "X/Y" notation), order = scatter (per-sample seed, 3rd arg), n = 10 answer
 # sets/shot. A single scatter order file is generated once and handed to every solver so all
 # four forbid the identical element sequence (the soundness cross-check). Mirrors
 # examples/groundexp/bench-constraints.sh exactly, but runs ONE config in isolation.
@@ -14,7 +14,8 @@ source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 
 CONFIG="${1:?config token required}"
 N="${2:?domain size required}"
-announce groundexp "$N"
+SEED="${3:?sample seed required}"
+announce groundexp "$N-s$SEED"
 
 GE="$EXAMPLES/groundexp"
 ENCODING="$GE/encoding.lp"
@@ -37,12 +38,13 @@ SCHED="$(schedule_for "$N")" || { echo "no tuned schedule for dom=$N" >&2; exit 
 # SHOTS = (#schedule entries) + 1 base shot; FORBIDTOTAL = sum of entries.
 read -r FORBIDTOTAL SHOTS < <(awk -F, '{s=0;for(i=1;i<=NF;i++)s+=$i;print s, NF+1}' <<< "$SCHED")
 
-# Domain elements in file order, then the deterministic scatter permutation (python seed 42),
-# one element per line — identical to bench-constraints.sh's scatter branch.
+# Domain elements in file order, then the deterministic scatter permutation (python seed = this
+# sample's SEED), one element per line — identical to bench-constraints.sh's scatter branch, and
+# handed identically to all four solvers so their per-shot answer-set counts still cross-check.
 mapfile_els() { grep -oE 'dom\([0-9]+\)' "$DOM" | grep -oE '[0-9]+'; }
 ELS=(); while IFS= read -r e; do [[ -n "$e" ]] && ELS+=("$e"); done < <(mapfile_els)
 ORDER="$(mktemp)"; trap 'rm -f "$ORDER"' EXIT
-"$PYTHON" -c 'import random,sys; xs=sys.argv[1:]; random.Random(42).shuffle(xs); print("\n".join(xs))' "${ELS[@]}" > "$ORDER"
+"$PYTHON" -c 'import random,sys; seed=int(sys.argv[1]); xs=sys.argv[2:]; random.Random(seed).shuffle(xs); print("\n".join(xs))' "$SEED" "${ELS[@]}" > "$ORDER"
 ORD=(); while IFS= read -r e; do [[ -n "$e" ]] && ORD+=("$e"); done < "$ORDER"
 
 case "$CONFIG" in

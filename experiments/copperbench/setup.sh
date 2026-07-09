@@ -4,14 +4,29 @@
 #
 #     bash experiments/copperbench/setup.sh
 #
-# It (1) builds the standalone Alpha classpath, (2) pre-generates every benchmark instance
-# deterministically (so the parallel SLURM jobs never race to create a file), and (3) renders
-# the copperbench <bench>.json config files from the <bench>.json.in templates, baking in the
-# absolute checkout path and the cluster-specific fields.
+# It (1) builds the standalone Alpha classpath, (2) expands each committed <bench>.sizes grid
+# into a <bench>.instances list with a per-sample SEED column and pre-generates every seeded
+# benchmark instance deterministically (so the parallel SLURM jobs never race to create a file),
+# and (3) renders the copperbench <bench>.json config files from the <bench>.json.in templates,
+# baking in the absolute checkout path and the cluster-specific fields.
 #
-# Cluster override (env var, optional):
-#     PARTITION   SLURM partition (default: broadwell) — pins every run to one CPU type so the
-#                 timings are comparable. runsolver/clearcache use copperbench's own defaults.
+# Random sampling (each instance SIZE is run on NUM_SAMPLES independently-seeded random
+# instances; all four solver configs see the identical seeded instance, so the comparison
+# stays 1:1 per sample). Env overrides:
+#     BASE_SEED     first seed (default 42); sample k uses seed BASE_SEED+k
+#     NUM_SAMPLES   random instances per size (default 10) — the paper averages over 10
+#     PARTITION     SLURM partition (default: sunnycove) — pins every run to one CPU type so the
+#                   timings are comparable. runsolver/clearcache use copperbench's own defaults.
+#
+# What the seed varies, per benchmark:
+#     groundexp   the scatter forbid ORDER (the domain dom(1..N) is fixed by the size). Built
+#                 in-wrapper from the seed, handed identically to all four solvers.
+#     cutedge     the random graph (gen_cutedge.py seed). Each solver still drives its own
+#                 answer-set cut sequence on that shared graph (own-sequence methodology).
+#     reach       the random directed graph (gen-random-graph.py seed) -> which edges arrive.
+#     coloring    base graph + the model-dependent edit stream, generated inside the Java driver
+#     coloring-   from (V,E,seed); clingo replays Alpha's per-shot dump, so all four align.
+#       grow
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,9 +34,12 @@ REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 EXAMPLES="$REPO_ROOT/examples"
 PY="${PYTHON:-python3}"
 
-PARTITION="${PARTITION:-broadwell}"
+PARTITION="${PARTITION:-sunnycove}"
+BASE_SEED="${BASE_SEED:-42}"
+NUM_SAMPLES="${NUM_SAMPLES:-10}"
 
 echo "==> repo root: $REPO_ROOT"
+echo "==> sampling: NUM_SAMPLES=$NUM_SAMPLES seeds $BASE_SEED..$((BASE_SEED + NUM_SAMPLES - 1))"
 
 # 1. Build the standalone Alpha distribution (no gradle needed at run time thereafter).
 echo "==> building alpha-cli-app (installDist) ..."
@@ -30,36 +48,73 @@ LIBDIR="$REPO_ROOT/alpha-cli-app/build/install/alpha-cli-app/lib"
 [[ -d "$LIBDIR" ]] || { echo "ERROR: $LIBDIR missing after installDist" >&2; exit 1; }
 echo "    classpath: $LIBDIR"
 
-# 2. Pre-generate all instances deterministically.
-echo "==> generating instances ..."
+# seeds — the shared BASE_SEED..BASE_SEED+NUM_SAMPLES-1 sequence, reused for every size.
+SEEDS=(); for ((k=0; k<NUM_SAMPLES; k++)); do SEEDS+=($((BASE_SEED + k))); done
 
-# groundexp: dom-N.lp = dom(1..N).
+# read_sizes <bench> — echo the non-empty, non-comment lines of <bench>.sizes (the size grid).
+read_sizes() { grep -vE '^\s*(#|$)' "$HERE/$1.sizes"; }
+
+# 2. Expand each size grid into a seeded <bench>.instances and pre-generate the seeded inputs.
+echo "==> expanding size grids x $NUM_SAMPLES seeds and generating instances ..."
+
+# groundexp: dom-N.lp = dom(1..N), seed-independent (the seed only permutes the forbid order,
+# done in-wrapper). Instance line: "<N> <seed>".
 mkdir -p "$EXAMPLES/groundexp/instances"
-for N in 8 10 12 14 16 18 20 500 1000; do
+: > "$HERE/groundexp.instances"
+while read -r N; do
     f="$EXAMPLES/groundexp/instances/dom-$N.lp"
     [[ -f "$f" ]] || "$PY" "$EXAMPLES/groundexp/gen_dom.py" "$N" > "$f"
-done
+    for s in "${SEEDS[@]}"; do echo "$N $s" >> "$HERE/groundexp.instances"; done
+done < <(read_sizes groundexp)
 
-# cutedge: gen_cutedge.py writes instances/edges-<V>-<pct>.lp itself (seed 42).
-for pair in 100-30 100-50 200-30 200-50 300-10 300-30 500-10 500-30 500-50; do
-    V="${pair%-*}"; P="${pair#*-}"
-    f="$EXAMPLES/cutedge/instances/edges-$V-$P.lp"
-    [[ -f "$f" ]] || "$PY" "$EXAMPLES/cutedge/gen_cutedge.py" "$V" "$P" 42 >/dev/null
-done
+# cutedge: one random graph per (V,pct,seed). gen_cutedge.py writes edges-<V>-<pct>.lp (fixed
+# name); rename to the seeded name so the 10 samples coexist. Instance line: "<V> <pct> <seed>".
+mkdir -p "$EXAMPLES/cutedge/instances"
+: > "$HERE/cutedge.instances"
+while read -r V P; do
+    for s in "${SEEDS[@]}"; do
+        f="$EXAMPLES/cutedge/instances/edges-$V-$P-s$s.lp"
+        if [[ ! -f "$f" ]]; then
+            "$PY" "$EXAMPLES/cutedge/gen_cutedge.py" "$V" "$P" "$s" >/dev/null
+            mv "$EXAMPLES/cutedge/instances/edges-$V-$P.lp" "$f"
+        fi
+        echo "$V $P $s" >> "$HERE/cutedge.instances"
+    done
+done < <(read_sizes cutedge)
 
-# reach: random directed graph, seed 0 (matches the sweep grid file names).
+# reach: one random directed graph per (V,Emult,seed). Instance line: "<V> <Emult> <seed>".
 mkdir -p "$EXAMPLES/reach/instances"
-for pair in 1000:4 1000:8 10000:2 10000:4 10000:8; do
-    V="${pair%:*}"; M="${pair#*:}"; E=$(( V * M ))
-    f="$EXAMPLES/reach/instances/edges-rand-v$V-e$E.lp"
-    [[ -f "$f" ]] || "$PY" "$EXAMPLES/reach/gen-random-graph.py" --vertices "$V" --edges "$E" --seed 0 > "$f"
-done
+: > "$HERE/reach.instances"
+while read -r V M; do
+    E=$(( V * M ))
+    for s in "${SEEDS[@]}"; do
+        f="$EXAMPLES/reach/instances/edges-rand-v$V-e$E-s$s.lp"
+        [[ -f "$f" ]] || "$PY" "$EXAMPLES/reach/gen-random-graph.py" --vertices "$V" --edges "$E" --seed "$s" > "$f"
+        echo "$V $M $s" >> "$HERE/reach.instances"
+    done
+done < <(read_sizes reach)
 
-# coloring: no instance files — the Java driver generates the base graph internally from (V,E,seed).
+# coloring / coloring-grow: no instance files — the Java driver generates the base graph + edit
+# stream internally from (V,E,seed). Just expand the instance lists.
+#   coloring       line: "<V> <E> <seed>"
+#   coloring-grow  line: "<V> <E> <SHOTS> <seed>"
+: > "$HERE/coloring.instances"
+while read -r V E; do
+    for s in "${SEEDS[@]}"; do echo "$V $E $s" >> "$HERE/coloring.instances"; done
+done < <(read_sizes coloring)
+
+: > "$HERE/coloring-grow.instances"
+while read -r V E SHOTS; do
+    for s in "${SEEDS[@]}"; do echo "$V $E $SHOTS $s" >> "$HERE/coloring-grow.instances"; done
+done < <(read_sizes coloring-grow)
+
+for b in groundexp cutedge reach coloring coloring-grow; do
+    echo "    $b.instances: $(wc -l < "$HERE/$b.instances") lines"
+done
 
 # 3. Render the copperbench JSON configs from templates.
 echo "==> rendering copperbench configs (partition=$PARTITION) ..."
-for b in groundexp cutedge reach coloring; do
+for b in groundexp cutedge reach coloring coloring-grow; do
     sed -e "s#__REPO_ROOT__#$REPO_ROOT#g" \
         -e "s#__PARTITION__#$PARTITION#g" \
         "$HERE/$b.json.in" > "$HERE/$b.json"
@@ -77,8 +132,9 @@ Next (from the repo root, with copperbench installed — see README):
     copperbench experiments/copperbench/cutedge.json
     copperbench experiments/copperbench/reach.json
     copperbench experiments/copperbench/coloring.json
+    copperbench experiments/copperbench/coloring-grow.json
 Then submit each generated folder:  ( cd groundexp && bash submit_all.sh )   # etc.
 
-After the runs finish, collect results:
-    python3 experiments/copperbench/postprocess/collect.py groundexp cutedge reach coloring
+After the runs finish, collect results (mean over the $NUM_SAMPLES samples per size):
+    python3 experiments/copperbench/postprocess/collect.py groundexp cutedge reach coloring coloring-grow
 EOF

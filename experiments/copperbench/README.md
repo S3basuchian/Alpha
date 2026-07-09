@@ -1,6 +1,6 @@
 # Copperbench experiments — AlphaInc incremental benchmarks
 
-Reproduces the four benchmark tables of the *AlphaInc: Incremental Lazy Grounding* paper on a
+Reproduces the benchmark tables of the *AlphaInc: Incremental Lazy Grounding* paper on a
 SLURM cluster via [copperbench](https://github.com/tlyphed/copperbench), and collects the runs
 into a CSV and the paper's LaTeX tables.
 
@@ -9,7 +9,16 @@ into a CSV and the paper's LaTeX tables.
 | Table 1 (Ground explosion) | `groundexp` | \|dom\| = 8,10,12,14,16,18,20,500,1000 | 3–5 forbid shots |
 | Table 2 (Cutedge)          | `cutedge`  | \|V\|/E% = 100/30 … 500/50 (9)          | 10 |
 | Table 3 (Reachability)     | `reach`    | \|V\|/E_mult = 1000/4 … 10000/8 (5)     | 5  |
-| Table 4 (5-coloring)       | `coloring` | \|V\|/\|E\| = 10/40 … 1000/4000 (8)     | 20 |
+| Table 4 (5-coloring, mixed edits) | `coloring` | \|V\|/\|E\| = 10/40 … 1000/4000 (8)     | 20 |
+| Table 5 (5-coloring, monotone growth) | `coloring-grow` | \|V\|/\|E\| = 1000/4000, 2000/8000, 4000/16000 | 10, 20, 40 |
+
+`coloring` and `coloring-grow` share the same driver and 5-colouring encoding: `coloring` drives
+a mixed edit stream (grow / add-edge / retract / constrain) to stress *search*-state reuse, while
+`coloring-grow` uses `rotation=grow` (each shot adds one pendant vertex + edge) to isolate
+*grounding / atom-store* reuse and sweeps the shot count. Its instances are `V E SHOTS` triples,
+so each (size, shots) pair is one table row (Shots column). Its per-run timeout is raised to
+3600 s because the 4000/16000, 40-shot `alpha-rebuilt` cell is ~660 s on Apple Silicon and slower
+on cluster cores — tune `coloring-grow.json.in` / drop the largest cell if that is too costly.
 
 Each table has four solver columns, produced by four copperbench *configs*:
 
@@ -28,15 +37,35 @@ excludes JVM/gradle startup. `runsolver` enforces the limits and marks the Timeo
 
 | | |
 |---|---|
-| timeout    | **300 s** wall-clock per run |
-| memory     | **16 GB** per run |
-| repetitions| **3** runs per (config, instance); the postprocessor reports the **median** |
+| timeout    | **300 s** wall-clock per run (`coloring-grow`: 3600 s) |
+| memory     | **64 GB** per run — the runsolver cap for the *whole* job (Alpha JVM, or the clingo subprocess whose eager grounding can blow up on cutedge O(V³) / groundexp) |
+| java heap  | **`-Xmx60g -XX:MaxRAM=64000M`** — Alpha's Java heap uses the full node memory, kept a few GB under the 64 GB cap so a blow-up trips runsolver (Memout) rather than a premature JVM OOM. Override via `JVM_XMX` |
+| samples    | **10** random instances per size (`NUM_SAMPLES`, seeds `BASE_SEED..BASE_SEED+9`, default `42..51`); the postprocessor reports the **mean over the samples** — matching the paper's "averaged over 10 instances" |
+| repetitions| **1** run per (config, sample) — the 10 samples are the variance estimate. Raise `runs` in a `*.json.in` for extra timing-noise repetitions; the postprocessor then takes the per-sample median before averaging |
 | cores      | **1** per run (single-threaded; fair Alpha-vs-clingo comparison) |
-| partition  | **broadwell** (pins every run to one CPU generation so timings are comparable; override with `PARTITION=…`) |
+| partition  | **sunnycove** (pins every run to one CPU generation so timings are comparable; override with `PARTITION=…`) |
 | use_perf   | **false** (we don't collect perf counters; avoids `perf_event_paranoid` issues) |
 
 Change any of these by editing the `*.json.in` templates and re-running `setup.sh`, or the
-generated `*.json` directly.
+generated `*.json` directly. `NUM_SAMPLES` / `BASE_SEED` are env overrides to `setup.sh`
+(like `PARTITION`); they control how many seeded instance rows each size expands to.
+
+### Random sampling — same 10 instances for all four solvers
+
+Each instance **size** is run on `NUM_SAMPLES` independently-seeded random instances, and **all
+four solver configs see the identical seeded instance** (the seed rides the copperbench instance
+line, so the configs×instances grid hands the same `<size> <seed>` to every config). This keeps
+the comparison 1:1 per sample. What the seed varies, per benchmark:
+
+| Benchmark | Seed varies | 1:1 across the four solvers because… |
+|---|---|---|
+| `groundexp` | the scatter **forbid order** (the domain `dom(1..N)` is fixed by the size) | the order file is rebuilt in-wrapper from the seed, handed identically to all four (their per-shot answer-set counts still cross-check) |
+| `reach`     | the random directed **graph** (which edges arrive) | all four read the same seeded `edges-rand-…-s<seed>.lp` |
+| `coloring` / `coloring-grow` | base graph **+** the model-dependent edit stream | clingo replays Alpha's per-shot program dump, produced from that seed |
+| `cutedge`   | the random **graph** only | each solver still drives its **own** answer-set cut sequence on that shared graph (own-sequence methodology — the encoding's `delete` is an arbitrary single edge, so the sequences may diverge; this is intentional and unchanged) |
+
+A cell where some samples time/mem-out reports the mean over the *finished* samples and a `note:`
+line to stderr (never a silent average over a subset).
 
 ## Prerequisites on the cluster
 
@@ -51,27 +80,29 @@ generated `*.json` directly.
 ```bash
 # 0. from the repo root, on the cluster head node
 #    (override cluster fields if they differ from copperbench's defaults)
-PARTITION=broadwell bash experiments/copperbench/setup.sh
+PARTITION=sunnycove bash experiments/copperbench/setup.sh
 #    -> builds alpha-cli-app (installDist), pre-generates all instances,
-#       renders experiments/copperbench/{groundexp,cutedge,reach,coloring}.json
+#       renders experiments/copperbench/{groundexp,cutedge,reach,coloring,coloring-grow}.json
 
 # 1. generate the SLURM job trees
 copperbench experiments/copperbench/groundexp.json
 copperbench experiments/copperbench/cutedge.json
 copperbench experiments/copperbench/reach.json
 copperbench experiments/copperbench/coloring.json
+copperbench experiments/copperbench/coloring-grow.json
 
 # 2. submit (each command creates a <name>/ folder in the CWD)
-( cd groundexp && bash submit_all.sh )
-( cd cutedge   && bash submit_all.sh )
-( cd reach     && bash submit_all.sh )
-( cd coloring  && bash submit_all.sh )
+( cd groundexp     && bash submit_all.sh )
+( cd cutedge       && bash submit_all.sh )
+( cd reach         && bash submit_all.sh )
+( cd coloring      && bash submit_all.sh )
+( cd coloring-grow && bash submit_all.sh )
 
 # 3. once everything has finished, collect results (CSV + LaTeX)
-python3 experiments/copperbench/postprocess/collect.py groundexp cutedge reach coloring
-#    -> results_long.csv   (one row per run: seconds / status / run_dir)
-#       results_wide.csv   (median per instance × the four columns)
-#       tables.tex         (the four tables, paper shape, ready to paste)
+python3 experiments/copperbench/postprocess/collect.py groundexp cutedge reach coloring coloring-grow
+#    -> results_long.csv   (one row per (config, seeded-instance, run): seconds / status / run_dir)
+#       results_wide.csv   (mean-over-samples per size × the four columns)
+#       tables.tex         (the five tables, paper shape, ready to paste)
 ```
 
 Run `copperbench` and `collect.py` from the same directory (the repo root is convenient), so
@@ -79,13 +110,17 @@ the `<name>/` output folders and the `results_*.csv` end up together.
 
 ## Reproducibility
 
-Instances are generated deterministically, so a fresh checkout reproduces identical inputs:
-- `groundexp`: `dom(1..N)`; forbid order = `random.Random(42)` scatter permutation, handed
+Instances are generated deterministically from the sample seed, so a fresh checkout reproduces
+identical inputs. Each size expands to `NUM_SAMPLES` rows with seeds `BASE_SEED..BASE_SEED+N-1`
+(default `42..51`), and `setup.sh` pre-generates every seeded input file so the parallel SLURM
+jobs never race to create one:
+- `groundexp`: `dom(1..N)`; forbid order = `random.Random(seed)` scatter permutation, handed
   identically to all four solvers (their per-shot answer-set counts must agree — a cross-check).
-- `cutedge`: random graph, **seed 42** (`gen_cutedge.py`).
-- `reach`: random directed graph, **seed 0** (`gen-random-graph.py`).
-- `coloring`: base graph generated inside the Java driver (`JavaRandom`, **seed 42**); the
-  model-dependent edit stream is recorded by Alpha and replayed identically by clingo.
+- `cutedge`: random graph per seed (`gen_cutedge.py <V> <pct> <seed>` → `edges-<V>-<pct>-s<seed>.lp`).
+- `reach`: random directed graph per seed (`gen-random-graph.py --seed` → `edges-rand-…-s<seed>.lp`).
+- `coloring` / `coloring-grow`: base graph generated inside the Java driver (`JavaRandom`, the
+  sample seed); the model-dependent edit stream is recorded by Alpha and replayed identically by
+  clingo.
 
 ## Coloring clingo-MSS
 
@@ -101,10 +136,11 @@ to produce the identical per-shot SAT/UNSAT sequence as the rebuilt driver.
 ```
 experiments/copperbench/
 ├── README.md                     this file
-├── setup.sh                      build jar + generate instances + render *.json
+├── setup.sh                      build jar + expand grids × seeds + generate instances + render *.json
 ├── <bench>.json.in               copperbench config templates (__REPO_ROOT__/__PARTITION__/…)
 ├── <bench>.configs               the config tokens (one per line)
-├── <bench>.instances             the instance parameters (one per line)
+├── <bench>.sizes                 committed base size grid (one size per line, no seed)
+├── <bench>.instances             GENERATED by setup.sh: <bench>.sizes × seeds (gitignored)
 ├── wrappers/
 │   ├── _common.sh                shared helpers (paths, JVM opts, result emission)
 │   └── run-<bench>.sh            runs ONE config for ONE instance, prints RESULT_SECONDS

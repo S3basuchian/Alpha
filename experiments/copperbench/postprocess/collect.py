@@ -5,16 +5,22 @@ paper's four LaTeX tables.
 Usage (from wherever the copperbench <name>/ output folders live — normally the repo root):
     python3 experiments/copperbench/postprocess/collect.py [--results-dir .] [BENCH ...]
 
-with BENCH in {groundexp, cutedge, reach, coloring} (default: all four). For each benchmark it
-reads every <name>/<config>/<instance>/run*/ directory, extracts the solver's self-reported
-overall runtime (the `RESULT_SECONDS=` line the wrappers print — the same "overall runtime"
-the paper reports, excluding JVM/gradle startup), takes the median across the repeated runs,
-and classifies missing results as Timeout / Memout from the runsolver watcher output.
+with BENCH in {groundexp, cutedge, reach, coloring, coloring-grow} (default: all). For each
+benchmark it reads every <name>/<config>/<instance>/run*/ directory, extracts the solver's
+self-reported overall runtime (the `RESULT_SECONDS=` line the wrappers print — the same
+"overall runtime" the paper reports, excluding JVM/gradle startup), and classifies missing
+results as Timeout / Memout from the runsolver watcher output.
+
+Each instance SIZE is run on NUM_SAMPLES independently-seeded random instances (the RESULT_INSTANCE
+carries a `-s<seed>` suffix). Aggregation is two-level, matching the paper: within one sample take
+the median across any repeated runs, then report the MEAN over the size's samples (the paper
+averages over 10 random instances). A cell with some samples unfinished reports the mean over the
+finished ones and a `note:` line to stderr; a cell with none finished reports Timeout/Memout.
 
 Outputs (into the results dir):
-    results_long.csv   one row per (benchmark, config, instance, run): seconds / status
-    results_wide.csv   median per (benchmark, instance) across the four solver columns
-    tables.tex         the four tables, in the paper's shape, ready to paste
+    results_long.csv   one row per (benchmark, config, instance-with-seed, run): seconds / status
+    results_wide.csv   mean-over-samples per (benchmark, size) across the four solver columns
+    tables.tex         the tables, in the paper's shape, ready to paste
 """
 import argparse
 import csv
@@ -61,6 +67,20 @@ SPEC = {
                  ("400-1600", "400/1600", None), ("1000-4000", "1000/4000", None)],
         "row_head": r"$|V|/|E|$", "extra_head": None,
         "caption": "Graph $5$-coloring benchmark results.", "label": "tab:coloring",
+    },
+    # Monotone-growth variant: rotation=grow, sizes {1000,2000,4000} x shots {10,20,40}.
+    # Instance key is "V-E-SHOTS" (see run-coloring-grow.sh's announce), shots shown as the extra column.
+    "coloring-grow": {
+        "rows": [("1000-4000-10", "1000/4000", "10"), ("1000-4000-20", "1000/4000", "20"),
+                 ("1000-4000-40", "1000/4000", "40"),
+                 ("2000-8000-10", "2000/8000", "10"), ("2000-8000-20", "2000/8000", "20"),
+                 ("2000-8000-40", "2000/8000", "40"),
+                 ("4000-16000-10", "4000/16000", "10"), ("4000-16000-20", "4000/16000", "20"),
+                 ("4000-16000-40", "4000/16000", "40")],
+        "row_head": r"$|V|/|E|$", "extra_head": "Shots",
+        "caption": r"Graph $5$-coloring monotone-growth benchmark results "
+                   r"(\texttt{grow}: each shot adds one pendant vertex and edge).",
+        "label": "tab:coloring-grow",
     },
 }
 
@@ -129,22 +149,50 @@ def collect_benchmark(results_dir, bench):
     return agg
 
 
-def cell(agg, config, instance):
-    """Median seconds string, or a Timeout/Memout/n-a label, for one table cell."""
-    d = agg.get((config, instance))
-    if d is None:
+def size_of(instance):
+    """Strip the trailing -s<seed> sample suffix to get the instance-SIZE key the SPEC rows use
+    (e.g. "100-30-s42" -> "100-30", "1000-4000-10-s47" -> "1000-4000-10")."""
+    return re.sub(r"-s\d+$", "", instance)
+
+
+def sample_value(d):
+    """One representative runtime for a single sample: median over its repeated runs, or None."""
+    return statistics.median(d["secs"]) if d["secs"] else None
+
+
+def reduce_by_size(agg):
+    """Collapse {(config, instance): {...}} to {(config, size): {'vals', 'status', 'n_samples'}}
+    by grouping a size's random samples. 'vals' holds one value per finished sample (median over
+    its runs); 'n_samples' counts all samples; 'status' accumulates every run's status."""
+    by_size = {}
+    for (config, instance), d in agg.items():
+        b = by_size.setdefault((config, size_of(instance)),
+                               {"vals": [], "status": [], "n_samples": 0})
+        b["n_samples"] += 1
+        v = sample_value(d)
+        if v is not None:
+            b["vals"].append(v)
+        b["status"].extend(d["status"])
+    return by_size
+
+
+def cell(by_size, config, size):
+    """Mean seconds over the size's random samples (the paper averages over 10 instances), or a
+    Timeout/Memout/n-a label, for one table cell."""
+    b = by_size.get((config, size))
+    if b is None:
         return None  # config not run for this benchmark (e.g. coloring clingo-mss)
-    if d["secs"]:
-        return f"{statistics.median(d['secs']):.2f}"
-    # No successful run: report the failure kind (prefer Memout, then Timeout).
-    if "Memout" in d["status"]:
+    if b["vals"]:
+        return f"{statistics.mean(b['vals']):.2f}"
+    # No finished sample: report the failure kind (prefer Memout, then Timeout).
+    if "Memout" in b["status"]:
         return "Memout"
-    if "Timeout" in d["status"]:
+    if "Timeout" in b["status"]:
         return "Timeout"
     return "err"
 
 
-def latex_table(bench, agg):
+def latex_table(bench, by_size):
     s = SPEC[bench]
     has_extra = s["extra_head"] is not None
     # Column format: row-head [+ extra] + 4 numeric columns.
@@ -169,7 +217,7 @@ def latex_table(bench, agg):
     out.append(head)
     out.append(r"    \midrule")
     for key, disp, extra in s["rows"]:
-        cells = [cell(agg, c, key) for c in CONFIG_COLS]
+        cells = [cell(by_size, c, key) for c in CONFIG_COLS]
         cells = ["{--}" if c is None else c for c in cells]
         row = f"    {disp} & "
         if has_extra:
@@ -200,13 +248,20 @@ def main():
         agg = collect_benchmark(args.results_dir, bench)
         if not agg:
             print(f"warn: no runs found for {bench} under {args.results_dir}", file=sys.stderr)
+        by_size = reduce_by_size(agg)
         for (config, instance), d in sorted(agg.items()):
             for i, rd in enumerate(d["runs"]):
                 sv = d["secs"][i] if i < len(d["secs"]) else ""
                 long_rows.append([bench, config, instance, i + 1, sv, d["status"][i], rd])
         for key, disp, _ in SPEC[bench]["rows"]:
-            wide_rows.append([bench, disp] + [cell(agg, c, key) or "" for c in CONFIG_COLS])
-        tex.append(latex_table(bench, agg))
+            wide_rows.append([bench, disp] + [cell(by_size, c, key) or "" for c in CONFIG_COLS])
+        tex.append(latex_table(bench, by_size))
+        # Surface partially-finished cells (some samples timed/mem-out): the reported mean is over
+        # the finished samples only — never silently hide the dropped ones.
+        for (config, size), b in sorted(by_size.items()):
+            if b["vals"] and len(b["vals"]) < b["n_samples"]:
+                print(f"  note: {bench} {config} {size}: {len(b['vals'])}/{b['n_samples']} "
+                      f"samples finished (mean over finished)", file=sys.stderr)
 
     outdir = args.results_dir
     with open(os.path.join(outdir, "results_long.csv"), "w", newline="") as fh:
