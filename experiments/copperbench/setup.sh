@@ -83,15 +83,18 @@ while read -r V P; do
     done
 done < <(read_sizes cutedge)
 
-# reach: one random directed graph per (V,Emult,seed). Instance line: "<V> <Emult> <seed>".
+# reach: one random directed graph per (V,Emult,seed), driven in the "full base + one edge per
+# shot" protocol (each shot re-solves after a single edge is added to a near-full base). The graph
+# depends only on (V,Emult,seed) — shot rows for the same size reuse the same file. Size grid line:
+# "<V> <Emult> <SHOTS>"; instance line: "<V> <Emult> <SHOTS> <seed>".
 mkdir -p "$EXAMPLES/reach/instances"
 : > "$HERE/reach.instances"
-while read -r V M; do
+while read -r V M SHOTS; do
     E=$(( V * M ))
     for s in "${SEEDS[@]}"; do
         f="$EXAMPLES/reach/instances/edges-rand-v$V-e$E-s$s.lp"
         [[ -f "$f" ]] || "$PY" "$EXAMPLES/reach/gen-random-graph.py" --vertices "$V" --edges "$E" --seed "$s" > "$f"
-        echo "$V $M $s" >> "$HERE/reach.instances"
+        echo "$V $M $SHOTS $s" >> "$HERE/reach.instances"
     done
 done < <(read_sizes reach)
 

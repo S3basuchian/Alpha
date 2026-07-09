@@ -8,7 +8,7 @@ into a CSV and the paper's LaTeX tables.
 |---|---|---|---|
 | Table 1 (Ground explosion) | `groundexp` | \|dom\| = 8,10,12,14,16,18,20,500,1000 | 10 (small); 10/20/40 (500, 1000) |
 | Table 2 (Cutedge)          | `cutedge`  | \|V\|/E% = 100/30 … 500/50 (9)          | 10 |
-| Table 3 (Reachability)     | `reach`    | \|V\|/E_mult = 1000/4 … 10000/8 (5)     | 5  |
+| Table 3 (Reachability)     | `reach`    | \|V\|/E_mult = 1000/4 … 10000/8 (5)     | 10, 20, 40 |
 | Table 4 (5-coloring, mixed edits) | `coloring` | \|V\|/\|E\| = 10/40 … 1000/4000 (8)     | 20 |
 | Table 5 (5-coloring, monotone growth) | `coloring-grow` | \|V\|/\|E\| = 1000/4000, 2000/8000, 4000/16000 | 10, 20, 40 |
 
@@ -29,6 +29,15 @@ a mixed edit stream (grow / add-edge / retract / constrain) to stress *search*-s
 so each (size, shots) pair is one table row (Shots column). With the uniform 300 s cap, its largest
 cells (4000/16000 at 20/40 shots) may time out on the cluster — those cells then report as
 `Timeout` (see the cell format below).
+
+`reach` is the single-source reachability benchmark (positive `reachable/1` program) under a
+**full base + one edge per shot** protocol: shot 1 solves a near-full base graph (all but the last
+`SHOTS` edges), then each of the `SHOTS` shots adds exactly one edge and re-solves. This is the
+reach analog of `coloring-grow`: the incremental session (`alpha-mss`) pays only a 1-edge delta per
+shot while every rebuild baseline re-grounds the whole graph each shot. Instances are `V Emult
+SHOTS` triples swept at 10/20/40 shots (Shots column), so each (size, shots) pair is one row.
+`clingo-mss` must pre-declare the `V²` node-pair edge universe, so it memouts on the 10000-vertex
+sizes (viability cap) and is only viable at `V=1000`.
 
 Each table has four solver columns, produced by four copperbench *configs*:
 

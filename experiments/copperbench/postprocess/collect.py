@@ -59,12 +59,17 @@ SPEC = {
         "row_head": r"$|V|/E_\%$", "extra_head": None,
         "caption": "Cutedge benchmark results.", "label": "tab:cutedge",
     },
+    # Full base + one edge per shot: each shot re-solves after a single edge is added to a near-full
+    # base graph. Sizes {1000/4,1000/8,10000/2,10000/4,10000/8} x shots {10,20,40}. Instance key is
+    # "V-Emult-SHOTS" (see run-reach.sh's announce), shots shown as the extra column.
     "reach": {
-        "rows": [("1000-4", "1000/4", None), ("1000-8", "1000/8", None),
-                 ("10000-2", "10000/2", None), ("10000-4", "10000/4", None),
-                 ("10000-8", "10000/8", None)],
-        "row_head": r"$|V|/E_{mult}$", "extra_head": None,
-        "caption": "Reachability benchmark results.", "label": "tab:reach",
+        "rows": [("1000-4-10", "1000/4", "10"), ("1000-4-20", "1000/4", "20"), ("1000-4-40", "1000/4", "40"),
+                 ("1000-8-10", "1000/8", "10"), ("1000-8-20", "1000/8", "20"), ("1000-8-40", "1000/8", "40"),
+                 ("10000-2-10", "10000/2", "10"), ("10000-2-20", "10000/2", "20"), ("10000-2-40", "10000/2", "40"),
+                 ("10000-4-10", "10000/4", "10"), ("10000-4-20", "10000/4", "20"), ("10000-4-40", "10000/4", "40"),
+                 ("10000-8-10", "10000/8", "10"), ("10000-8-20", "10000/8", "20"), ("10000-8-40", "10000/8", "40")],
+        "row_head": r"$|V|/E_{mult}$", "extra_head": "Shots",
+        "caption": r"Reachability benchmark results (full base + one edge per shot).", "label": "tab:reach",
     },
     "coloring": {
         "rows": [("10-40", r"10/40$^{\dagger}$", None), ("20-80", "20/80", None),

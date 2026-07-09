@@ -46,7 +46,15 @@ public final class IncrementalReachBenchmark {
 
 		String encoding = Files.readString(encodingPath);
 		List<String> edgeLines = readNonBlankLines(edgesPath);
-		List<List<String>> chunks = splitIntoChunks(edgeLines, numShots);
+		// -Dreach.oneEdgeShots: start from a (near-)full base graph and add exactly ONE edge per shot,
+		// instead of streaming the whole graph in over numShots equal chunks. The base (all but the last
+		// numShots edges) is solved in shot 1; each subsequent shot adds a single edge. This makes batch
+		// re-ground the WHOLE graph every shot (max cost) while live pays only a 1-edge delta — the reach
+		// analog of the coloring "grow" protocol.
+		boolean oneEdgeShots = Boolean.getBoolean("reach.oneEdgeShots");
+		List<List<String>> chunks = oneEdgeShots
+				? splitBasePlusSingletons(edgeLines, numShots)
+				: splitIntoChunks(edgeLines, numShots);
 
 		Alpha alpha = newAlpha();
 		AlphaSession session = alpha.newSession();
@@ -112,6 +120,23 @@ public final class IncrementalReachBenchmark {
 			}
 		}
 		return out;
+	}
+
+	/**
+	 * Build shots for the "full base + one edge per shot" protocol: shot 1 is the whole graph except its
+	 * last {@code numSingleShots} edges (the base), and each of the following {@code numSingleShots} shots
+	 * adds exactly one held-out edge. Total shots = {@code numSingleShots + 1}. If the graph has fewer than
+	 * {@code numSingleShots} edges the base is empty and every edge becomes its own shot.
+	 */
+	private static List<List<String>> splitBasePlusSingletons(List<String> items, int numSingleShots) {
+		int n = items.size();
+		int baseCount = Math.max(0, n - numSingleShots);
+		List<List<String>> chunks = new ArrayList<>();
+		chunks.add(new ArrayList<>(items.subList(0, baseCount))); // shot 1: the (near-)full base graph
+		for (int i = baseCount; i < n; i++) {
+			chunks.add(new ArrayList<>(items.subList(i, i + 1))); // one edge per subsequent shot
+		}
+		return chunks;
 	}
 
 	private static <T> List<List<T>> splitIntoChunks(List<T> items, int numChunks) {

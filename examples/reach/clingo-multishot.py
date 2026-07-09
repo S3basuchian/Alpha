@@ -54,18 +54,37 @@ def split_into_chunks(items, num_chunks):
     return out
 
 
+def split_base_plus_singletons(items, num_single_shots):
+    """Full base + one edge per shot: chunk 0 is all but the last num_single_shots edges (the
+    near-full base solved in shot 1), then one edge per subsequent shot. Total shots = N+1."""
+    n = len(items)
+    base_count = max(0, n - num_single_shots)
+    out = [items[:base_count]]
+    for i in range(base_count, n):
+        out.append(items[i:i + 1])
+    return out
+
+
 def main():
-    if len(sys.argv) < 4:
-        print("Usage: clingo-multishot.py <encoding.lp> <edges.lp> <numShots> [viabilityCap]", file=sys.stderr)
+    argv = sys.argv[1:]
+    one_edge = False
+    if "--one-edge" in argv:
+        one_edge = True
+        argv.remove("--one-edge")
+    if len(argv) < 3:
+        print("Usage: clingo-multishot.py [--one-edge] <encoding.lp> <edges.lp> <numShots> [viabilityCap]",
+              file=sys.stderr)
         sys.exit(2)
-    encoding_path, edges_path, n_str = sys.argv[1], sys.argv[2], sys.argv[3]
-    cap = int(sys.argv[4]) if len(sys.argv) >= 5 else 4_000_000
+    encoding_path, edges_path, n_str = argv[0], argv[1], argv[2]
+    cap = int(argv[3]) if len(argv) >= 4 else 4_000_000
     num_shots = int(n_str)
 
     with open(encoding_path) as f:
         encoding = f.read()
     edges, nodes = parse_edges(edges_path)
-    chunks = split_into_chunks(edges, num_shots)
+    # --one-edge: near-full base in shot 1, then one edge per shot (matches Alpha's oneEdgeShots).
+    chunks = (split_base_plus_singletons(edges, num_shots) if one_edge
+              else split_into_chunks(edges, num_shots))
 
     # `#external edge(X,Y):node(X),node(Y)` grounds the recursion over O(V^2)
     # node pairs. Above the viability cap that base grounding is impractical
@@ -99,8 +118,7 @@ def main():
 
     cumulative = 0
     total = 0.0
-    for shot in range(1, num_shots + 1):
-        chunk = chunks[shot - 1]
+    for shot, chunk in enumerate(chunks, start=1):
         cumulative += len(chunk)
         t0 = time.time()
         for a, b in chunk:
@@ -113,7 +131,7 @@ def main():
         print(f"{shot:<6d} | {len(chunk):<10d} | {cumulative:<12d} | {elapsed:14.3f}{suffix}")
 
     print()
-    print(f"  total clingo MSS solve time: {total:.3f}s over {num_shots} shots")
+    print(f"  total clingo MSS solve time: {total:.3f}s over {len(chunks)} shots")
     print(f"  total clingo MSS wall time (incl. base setup): {setup_time + total:.3f}s")
 
 
