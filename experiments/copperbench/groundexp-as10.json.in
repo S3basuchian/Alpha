@@ -1,0 +1,15 @@
+{
+    "name": "groundexp-as10",
+    "executable": "bash __REPO_ROOT__/experiments/copperbench/wrappers/run-groundexp-as10.sh",
+    "configs": "__REPO_ROOT__/experiments/copperbench/groundexp-as10.configs",
+    "instances": "__REPO_ROOT__/experiments/copperbench/groundexp-as10.instances",
+    "instances_are_parameters": true,
+    "working_dir": "__REPO_ROOT__",
+    "timeout": 7200,
+    "mem_limit": 16000,
+    "request_cpus": 1,
+    "runs": 3,
+    "use_perf": false,
+    "postprocess_stdout_regex": "RESULT_SECONDS=([0-9.]+)",
+    "partition": "__PARTITION__"
+}

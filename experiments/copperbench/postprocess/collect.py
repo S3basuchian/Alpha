@@ -37,12 +37,28 @@ COL_HEADER = {"alpha-mss": "Alpha MSS", "alpha-rebuilt": "Alpha Rebuilt",
 # Per-benchmark row spec: ordered (instance_key, display_label, extra_col_or_None).
 # instance_key matches the RESULT_INSTANCE the wrapper prints.
 SPEC = {
-    "groundexp": {
-        "rows": [("8", "8", "3/4"), ("10", "10", "3/4"), ("12", "12", "3/4"),
-                 ("14", "14", "3/4"), ("16", "16", "3/4"), ("18", "18", "3/4"),
-                 ("20", "20", "3/4"), ("500", "500", "5/256"), ("1000", "1000", "5/512")],
+    # Ground explosion, model-dependent forbid-all (each shot: enumerate up to maxAS answer sets,
+    # block ALL selected elements found, re-solve). Own sequence per solver. Two tables by maxAS.
+    # Instance key "dom-shots"; small dom at 10 shots, big dom (500/1000) at 10/20/40 shots.
+    "groundexp-as2": {
+        "rows": [("8-10", "8", "10"), ("10-10", "10", "10"), ("12-10", "12", "10"),
+                 ("14-10", "14", "10"), ("16-10", "16", "10"), ("18-10", "18", "10"),
+                 ("20-10", "20", "10"),
+                 ("500-10", "500", "10"), ("500-20", "500", "20"), ("500-40", "500", "40"),
+                 ("1000-10", "1000", "10"), ("1000-20", "1000", "20"), ("1000-40", "1000", "40")],
         "row_head": r"$|\mathit{dom}|$", "extra_head": "Shots",
-        "caption": "Ground explosion benchmark results.", "label": "tab:groundexp",
+        "caption": r"Ground explosion, model-dependent forbid-all, $\mathit{maxAS}=2$.",
+        "label": "tab:groundexp-as2",
+    },
+    "groundexp-as10": {
+        "rows": [("8-10", "8", "10"), ("10-10", "10", "10"), ("12-10", "12", "10"),
+                 ("14-10", "14", "10"), ("16-10", "16", "10"), ("18-10", "18", "10"),
+                 ("20-10", "20", "10"),
+                 ("500-10", "500", "10"), ("500-20", "500", "20"), ("500-40", "500", "40"),
+                 ("1000-10", "1000", "10"), ("1000-20", "1000", "20"), ("1000-40", "1000", "40")],
+        "row_head": r"$|\mathit{dom}|$", "extra_head": "Shots",
+        "caption": r"Ground explosion, model-dependent forbid-all, $\mathit{maxAS}=10$.",
+        "label": "tab:groundexp-as10",
     },
     "cutedge": {
         "rows": [("100-30", "100/30", None), ("100-50", "100/50", None),
