@@ -19,8 +19,8 @@
 #                   timings are comparable. runsolver/clearcache use copperbench's own defaults.
 #
 # What the seed varies, per benchmark:
-#     groundexp-  nothing — model-dependent forbid-all is deterministic (block every found
-#      as{2,10}   selection), so the seed is only a timing repetition (the dom(1..N) instance is fixed).
+#     groundexp   nothing — model-dependent forbid-all (maxAS=2) is deterministic (block every
+#                 found selection), so the seed is only a timing repetition (dom(1..N) is fixed).
 #     cutedge     the random graph (gen_cutedge.py seed). Each solver still drives its own
 #                 answer-set cut sequence on that shared graph (own-sequence methodology).
 #     reach       the random directed graph (gen-random-graph.py seed) -> which edges arrive.
@@ -57,18 +57,16 @@ read_sizes() { grep -vE '^\s*(#|$)' "$HERE/$1.sizes"; }
 # 2. Expand each size grid into a seeded <bench>.instances and pre-generate the seeded inputs.
 echo "==> expanding size grids x $NUM_SAMPLES seeds and generating instances ..."
 
-# groundexp-as{2,10}: dom-N.lp = dom(1..N). Model-dependent forbid-all is deterministic, so the
-# seed is only a timing-repetition here (the instance does not vary). Size grid line: "<N> <shots>";
-# instance line: "<N> <shots> <seed>". Same grid for both maxAS variants (maxAS is fixed by the wrapper).
+# groundexp: dom-N.lp = dom(1..N). Model-dependent forbid-all (maxAS=2) is deterministic, so the
+# seed is only a timing repetition here (the instance does not vary). Size grid line: "<N> <shots>";
+# instance line: "<N> <shots> <seed>".
 mkdir -p "$EXAMPLES/groundexp/instances"
-for b in groundexp-as2 groundexp-as10; do
-    : > "$HERE/$b.instances"
-    while read -r N SHOTS; do
-        f="$EXAMPLES/groundexp/instances/dom-$N.lp"
-        [[ -f "$f" ]] || "$PY" "$EXAMPLES/groundexp/gen_dom.py" "$N" > "$f"
-        for s in "${SEEDS[@]}"; do echo "$N $SHOTS $s" >> "$HERE/$b.instances"; done
-    done < <(read_sizes "$b")
-done
+: > "$HERE/groundexp.instances"
+while read -r N SHOTS; do
+    f="$EXAMPLES/groundexp/instances/dom-$N.lp"
+    [[ -f "$f" ]] || "$PY" "$EXAMPLES/groundexp/gen_dom.py" "$N" > "$f"
+    for s in "${SEEDS[@]}"; do echo "$N $SHOTS $s" >> "$HERE/groundexp.instances"; done
+done < <(read_sizes groundexp)
 
 # cutedge: one random graph per (V,pct,seed). gen_cutedge.py writes edges-<V>-<pct>.lp (fixed
 # name); rename to the seeded name so the 10 samples coexist. Instance line: "<V> <pct> <seed>".
@@ -111,13 +109,13 @@ while read -r V E SHOTS; do
     for s in "${SEEDS[@]}"; do echo "$V $E $SHOTS $s" >> "$HERE/coloring-grow.instances"; done
 done < <(read_sizes coloring-grow)
 
-for b in groundexp-as2 groundexp-as10 cutedge reach coloring coloring-grow; do
+for b in groundexp cutedge reach coloring coloring-grow; do
     echo "    $b.instances: $(wc -l < "$HERE/$b.instances") lines"
 done
 
 # 3. Render the copperbench JSON configs from templates.
 echo "==> rendering copperbench configs (partition=$PARTITION) ..."
-for b in groundexp-as2 groundexp-as10 cutedge reach coloring coloring-grow; do
+for b in groundexp cutedge reach coloring coloring-grow; do
     sed -e "s#__REPO_ROOT__#$REPO_ROOT#g" \
         -e "s#__PARTITION__#$PARTITION#g" \
         "$HERE/$b.json.in" > "$HERE/$b.json"
@@ -131,8 +129,7 @@ cat <<EOF
 ==> setup complete.
 
 Next (from the repo root, with copperbench installed — see README):
-    copperbench experiments/copperbench/groundexp-as2.json
-    copperbench experiments/copperbench/groundexp-as10.json
+    copperbench experiments/copperbench/groundexp.json
     copperbench experiments/copperbench/cutedge.json
     copperbench experiments/copperbench/reach.json
     copperbench experiments/copperbench/coloring.json
@@ -140,5 +137,5 @@ Next (from the repo root, with copperbench installed — see README):
 Then submit each generated folder:  ( cd groundexp && bash submit_all.sh )   # etc.
 
 After the runs finish, collect results (mean over the $NUM_SAMPLES samples per size):
-    python3 experiments/copperbench/postprocess/collect.py groundexp-as2 groundexp-as10 cutedge reach coloring coloring-grow
+    python3 experiments/copperbench/postprocess/collect.py groundexp cutedge reach coloring coloring-grow
 EOF

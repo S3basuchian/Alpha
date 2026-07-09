@@ -1,17 +1,17 @@
-# Shared core for run-groundexp-as{2,10}.sh — ground-explosion with a MODEL-DEPENDENT forbid-all
-# protocol (each shot: enumerate up to maxAS answer sets, block ALL selected elements found,
-# re-solve). Own sequence per solver (like cutedge): every column drives its own forbid stream.
-#
-# The including wrapper sets MAXAS (2 or 10), then sources this. copperbench passes, positionally:
-#     $1 config   $2 domSize   $3 shots   $4 seed
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
-: "${MAXAS:?MAXAS must be set by the including wrapper}"
+#!/usr/bin/env bash
+# Ground explosion, MODEL-DEPENDENT forbid-all (maxAS=2) — copperbench wrapper.
+# Each shot: enumerate up to 2 answer sets, block ALL selected elements found (:- p(i,...,i).),
+# re-solve. Own sequence per solver (like cutedge): every column drives its own forbid stream.
+# copperbench passes, positionally:  $1 config   $2 domSize   $3 shots   $4 seed
+set -u
+source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 
+MAXAS=2
 CONFIG="${1:?config token required}"
 N="${2:?domain size required}"
 SHOTS="${3:?shot count required}"
 SEED="${4:?sample seed required}"
-announce "groundexp-as$MAXAS" "$N-$SHOTS-s$SEED"
+announce groundexp "$N-$SHOTS-s$SEED"
 
 GE="$EXAMPLES/groundexp"
 ENCODING="$GE/encoding.lp"
@@ -19,8 +19,7 @@ DOM="$GE/instances/dom-$N.lp"
 MAIN="IncrementalGroundExpModelForbidBenchmark"
 [[ -f "$DOM" ]] || { mkdir -p "$GE/instances"; "$PYTHON" "$GE/gen_dom.py" "$N" > "$DOM"; }
 
-# forbid-all is deterministic (block every found selection), so the sample SEED only serves as a
-# timing-repetition here — it is passed through but does not vary the instance.
+# forbid-all is deterministic; the sample SEED is only a timing repetition (the instance is fixed).
 case "$CONFIG" in
   alpha-mss|alpha-rebuilt)
     m=mss; label="total mss:"

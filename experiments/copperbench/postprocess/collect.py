@@ -37,28 +37,18 @@ COL_HEADER = {"alpha-mss": "Alpha MSS", "alpha-rebuilt": "Alpha Rebuilt",
 # Per-benchmark row spec: ordered (instance_key, display_label, extra_col_or_None).
 # instance_key matches the RESULT_INSTANCE the wrapper prints.
 SPEC = {
-    # Ground explosion, model-dependent forbid-all (each shot: enumerate up to maxAS answer sets,
-    # block ALL selected elements found, re-solve). Own sequence per solver. Two tables by maxAS.
-    # Instance key "dom-shots"; small dom at 10 shots, big dom (500/1000) at 10/20/40 shots.
-    "groundexp-as2": {
+    # Ground explosion, model-dependent forbid-all, maxAS=2 (each shot: enumerate up to 2 answer sets,
+    # block ALL selected elements found, re-solve). Own sequence per solver. Instance key "dom-shots";
+    # small dom at 10 shots, big dom (500/1000) at 10/20/40 shots.
+    "groundexp": {
         "rows": [("8-10", "8", "10"), ("10-10", "10", "10"), ("12-10", "12", "10"),
                  ("14-10", "14", "10"), ("16-10", "16", "10"), ("18-10", "18", "10"),
                  ("20-10", "20", "10"),
                  ("500-10", "500", "10"), ("500-20", "500", "20"), ("500-40", "500", "40"),
                  ("1000-10", "1000", "10"), ("1000-20", "1000", "20"), ("1000-40", "1000", "40")],
         "row_head": r"$|\mathit{dom}|$", "extra_head": "Shots",
-        "caption": r"Ground explosion, model-dependent forbid-all, $\mathit{maxAS}=2$.",
-        "label": "tab:groundexp-as2",
-    },
-    "groundexp-as10": {
-        "rows": [("8-10", "8", "10"), ("10-10", "10", "10"), ("12-10", "12", "10"),
-                 ("14-10", "14", "10"), ("16-10", "16", "10"), ("18-10", "18", "10"),
-                 ("20-10", "20", "10"),
-                 ("500-10", "500", "10"), ("500-20", "500", "20"), ("500-40", "500", "40"),
-                 ("1000-10", "1000", "10"), ("1000-20", "1000", "20"), ("1000-40", "1000", "40")],
-        "row_head": r"$|\mathit{dom}|$", "extra_head": "Shots",
-        "caption": r"Ground explosion, model-dependent forbid-all, $\mathit{maxAS}=10$.",
-        "label": "tab:groundexp-as10",
+        "caption": r"Ground explosion, model-dependent forbid-all ($\mathit{maxAS}=2$).",
+        "label": "tab:groundexp",
     },
     "cutedge": {
         "rows": [("100-30", "100/30", None), ("100-50", "100/50", None),
@@ -193,19 +183,27 @@ def reduce_by_size(agg):
 
 
 def cell(by_size, config, size):
-    """Mean seconds over the size's random samples (the paper averages over 10 instances), or a
-    Timeout/Memout/n-a label, for one table cell."""
+    """One table cell: mean seconds over the size's finished random samples, with a trailing
+    ``(N)`` when N of the samples timed/mem-out (e.g. ``1.23 (3)`` = mean of the 7 finished, 3 failed).
+    If *every* sample failed, the failure kind (Timeout/Memout) is shown instead. ``None`` means the
+    config was not run for this benchmark."""
     b = by_size.get((config, size))
     if b is None:
         return None  # config not run for this benchmark (e.g. coloring clingo-mss)
-    if b["vals"]:
-        return f"{statistics.mean(b['vals']):.2f}"
-    # No finished sample: report the failure kind (prefer Memout, then Timeout).
-    if "Memout" in b["status"]:
-        return "Memout"
-    if "Timeout" in b["status"]:
-        return "Timeout"
-    return "err"
+    n = b["n_samples"]
+    finished = len(b["vals"])
+    if finished == 0:
+        # Every sample timed/mem-out: report the failure kind (prefer Memout, then Timeout).
+        if "Memout" in b["status"]:
+            return "Memout"
+        if "Timeout" in b["status"]:
+            return "Timeout"
+        return "err"
+    mean = statistics.mean(b["vals"])
+    failed = n - finished
+    if failed == 0:
+        return f"{mean:.2f}"
+    return f"{mean:.2f} ({failed})"  # mean over finished samples; N samples timed/mem-out
 
 
 def latex_table(bench, by_size):

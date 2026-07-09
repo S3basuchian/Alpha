@@ -6,33 +6,29 @@ into a CSV and the paper's LaTeX tables.
 
 | Paper table | Benchmark | Instance grid | Shots |
 |---|---|---|---|
-| Ground explosion, maxAS=2  | `groundexp-as2`  | \|dom\| = 8,10,12,14,16,18,20,500,1000 | 10 (small); 10/20/40 (500, 1000) |
-| Ground explosion, maxAS=10 | `groundexp-as10` | \|dom\| = 8,10,12,14,16,18,20,500,1000 | 10 (small); 10/20/40 (500, 1000) |
+| Table 1 (Ground explosion) | `groundexp` | \|dom\| = 8,10,12,14,16,18,20,500,1000 | 10 (small); 10/20/40 (500, 1000) |
 | Table 2 (Cutedge)          | `cutedge`  | \|V\|/E% = 100/30 … 500/50 (9)          | 10 |
 | Table 3 (Reachability)     | `reach`    | \|V\|/E_mult = 1000/4 … 10000/8 (5)     | 5  |
 | Table 4 (5-coloring, mixed edits) | `coloring` | \|V\|/\|E\| = 10/40 … 1000/4000 (8)     | 20 |
 | Table 5 (5-coloring, monotone growth) | `coloring-grow` | \|V\|/\|E\| = 1000/4000, 2000/8000, 4000/16000 | 10, 20, 40 |
 
-`groundexp-as2` / `groundexp-as10` are the ground-explosion benchmark under a **model-dependent
-forbid-all** protocol: each shot enumerates up to *maxAS* (2 or 10) answer sets and blocks **all**
-selected elements found (`:- p(i,…,i).`), then re-solves. Every solver drives its **own** forbid
-sequence from its own models (own-sequence, like `cutedge`) — nothing is shared or replayed. Small
-domains run 10 shots; the two big domains (500, 1000) run 10/20/40 shots (Shots column), so each
-(dom, shots) pair is one row, and maxAS=2 vs maxAS=10 are two separate tables. clingo still eagerly
-grounds the `p/6` cross-product, so it mem/times-out for \|dom\|≥18 (the L&W grounding wall) and on
-both big domains. Because forbid-all is **deterministic**, the seed is only a timing repetition here
-(all `NUM_SAMPLES` samples of a size are identical) — run these two with `NUM_SAMPLES=1` if you want
-to avoid redundant work. The maxAS=10 timeout is raised to 7200 s (the dom-1000/40-shot
-`alpha-rebuilt` cell is ~37 min on Apple Silicon and slower on cluster cores — drop that cell or
-raise the timeout further if needed).
+`groundexp` is the ground-explosion benchmark under a **model-dependent forbid-all** protocol
+(*maxAS = 2*): each shot enumerates up to 2 answer sets and blocks **all** selected elements found
+(`:- p(i,…,i).`), then re-solves. Every solver drives its **own** forbid sequence from its own models
+(own-sequence, like `cutedge`) — nothing is shared or replayed. Small domains run 10 shots; the two
+big domains (500, 1000) run 10/20/40 shots (Shots column), so each (dom, shots) pair is one row.
+clingo still eagerly grounds the `p/6` cross-product, so it mem/times-out for \|dom\|≥18 (the L&W
+grounding wall) and on both big domains. Because forbid-all is **deterministic**, the seed is only a
+timing repetition here (all `NUM_SAMPLES` samples of a size are identical) — run this one with
+`NUM_SAMPLES=1` if you want to avoid redundant work.
 
 `coloring` and `coloring-grow` share the same driver and 5-colouring encoding: `coloring` drives
 a mixed edit stream (grow / add-edge / retract / constrain) to stress *search*-state reuse, while
 `coloring-grow` uses `rotation=grow` (each shot adds one pendant vertex + edge) to isolate
 *grounding / atom-store* reuse and sweeps the shot count. Its instances are `V E SHOTS` triples,
-so each (size, shots) pair is one table row (Shots column). Its per-run timeout is raised to
-3600 s because the 4000/16000, 40-shot `alpha-rebuilt` cell is ~660 s on Apple Silicon and slower
-on cluster cores — tune `coloring-grow.json.in` / drop the largest cell if that is too costly.
+so each (size, shots) pair is one table row (Shots column). With the uniform 300 s cap, its largest
+cells (4000/16000 at 20/40 shots) may time out on the cluster — those cells then report as
+`Timeout` (see the cell format below).
 
 Each table has four solver columns, produced by four copperbench *configs*:
 
@@ -51,7 +47,7 @@ excludes JVM/gradle startup. `runsolver` enforces the limits and marks the Timeo
 
 | | |
 |---|---|
-| timeout    | **300 s** wall-clock per run (`coloring-grow`: 3600 s) |
+| timeout    | **300 s** wall-clock per run (uniform across all benchmarks) |
 | memory     | **64 GB** per run — the runsolver cap for the *whole* job (Alpha JVM, or the clingo subprocess whose eager grounding can blow up on cutedge O(V³) / groundexp) |
 | java heap  | **`-Xmx60g -XX:MaxRAM=64000M`** — Alpha's Java heap uses the full node memory, kept a few GB under the 64 GB cap so a blow-up trips runsolver (Memout) rather than a premature JVM OOM. Override via `JVM_XMX` |
 | samples    | **10** random instances per size (`NUM_SAMPLES`, seeds `BASE_SEED..BASE_SEED+9`, default `42..51`); the postprocessor reports the **mean over the samples** — matching the paper's "averaged over 10 instances" |
@@ -73,13 +69,16 @@ the comparison 1:1 per sample. What the seed varies, per benchmark:
 
 | Benchmark | Seed varies | 1:1 across the four solvers because… |
 |---|---|---|
-| `groundexp-as2` / `groundexp-as10` | **nothing** — model-dependent forbid-all is deterministic (block every found selection), so the seed is only a timing repetition (the `dom(1..N)` instance is fixed) | each solver drives its **own** forbid sequence from its own models (own-sequence, like `cutedge`); nothing is shared |
+| `groundexp` | **nothing** — model-dependent forbid-all (maxAS=2) is deterministic (block every found selection), so the seed is only a timing repetition (the `dom(1..N)` instance is fixed) | each solver drives its **own** forbid sequence from its own models (own-sequence, like `cutedge`); nothing is shared |
 | `reach`     | the random directed **graph** (which edges arrive) | all four read the same seeded `edges-rand-…-s<seed>.lp` |
 | `coloring` / `coloring-grow` | base graph **+** the model-dependent edit stream | clingo replays Alpha's per-shot program dump, produced from that seed |
 | `cutedge`   | the random **graph** only | each solver still drives its **own** answer-set cut sequence on that shared graph (own-sequence methodology — the encoding's `delete` is an arbitrary single edge, so the sequences may diverge; this is intentional and unchanged) |
 
-A cell where some samples time/mem-out reports the mean over the *finished* samples and a `note:`
-line to stderr (never a silent average over a subset).
+**Cell format for time/mem-outs.** Each table cell is the mean seconds over a size's finished
+samples. If some samples time/mem-out (under the uniform **300 s** cap), the cell shows the mean of
+the finished ones followed by the count of failures in brackets, e.g. `1.23 (3)` = mean of the 7
+finished samples, 3 timed/mem-out. If **all** samples fail, the cell shows the failure kind
+(`Timeout` or `Memout`) instead of a number — never a silent average over a subset.
 
 ## Prerequisites on the cluster
 
@@ -96,29 +95,27 @@ line to stderr (never a silent average over a subset).
 #    (override cluster fields if they differ from copperbench's defaults)
 PARTITION=sunnycove bash experiments/copperbench/setup.sh
 #    -> builds alpha-cli-app (installDist), pre-generates all instances,
-#       renders experiments/copperbench/{groundexp-as2,groundexp-as10,cutedge,reach,coloring,coloring-grow}.json
+#       renders experiments/copperbench/{groundexp,cutedge,reach,coloring,coloring-grow}.json
 
 # 1. generate the SLURM job trees
-copperbench experiments/copperbench/groundexp-as2.json
-copperbench experiments/copperbench/groundexp-as10.json
+copperbench experiments/copperbench/groundexp.json
 copperbench experiments/copperbench/cutedge.json
 copperbench experiments/copperbench/reach.json
 copperbench experiments/copperbench/coloring.json
 copperbench experiments/copperbench/coloring-grow.json
 
 # 2. submit (each command creates a <name>/ folder in the CWD)
-( cd groundexp-as2  && bash submit_all.sh )
-( cd groundexp-as10 && bash submit_all.sh )
+( cd groundexp     && bash submit_all.sh )
 ( cd cutedge        && bash submit_all.sh )
 ( cd reach          && bash submit_all.sh )
 ( cd coloring       && bash submit_all.sh )
 ( cd coloring-grow  && bash submit_all.sh )
 
 # 3. once everything has finished, collect results (CSV + LaTeX)
-python3 experiments/copperbench/postprocess/collect.py groundexp-as2 groundexp-as10 cutedge reach coloring coloring-grow
+python3 experiments/copperbench/postprocess/collect.py groundexp cutedge reach coloring coloring-grow
 #    -> results_long.csv   (one row per (config, seeded-instance, run): seconds / status / run_dir)
 #       results_wide.csv   (mean-over-samples per size × the four columns)
-#       tables.tex         (the six tables, paper shape, ready to paste)
+#       tables.tex         (the five tables, paper shape, ready to paste)
 ```
 
 Run `copperbench` and `collect.py` from the same directory (the repo root is convenient), so
@@ -130,7 +127,7 @@ Instances are generated deterministically from the sample seed, so a fresh check
 identical inputs. Each size expands to `NUM_SAMPLES` rows with seeds `BASE_SEED..BASE_SEED+N-1`
 (default `42..51`), and `setup.sh` pre-generates every seeded input file so the parallel SLURM
 jobs never race to create one:
-- `groundexp-as2` / `groundexp-as10`: `dom(1..N)`; model-dependent forbid-all is deterministic, so
+- `groundexp`: `dom(1..N)`; model-dependent forbid-all is deterministic, so
   the seed only repeats the timing (each solver drives its own forbid sequence from its own models).
 - `cutedge`: random graph per seed (`gen_cutedge.py <V> <pct> <seed>` → `edges-<V>-<pct>-s<seed>.lp`).
 - `reach`: random directed graph per seed (`gen-random-graph.py --seed` → `edges-rand-…-s<seed>.lp`).
