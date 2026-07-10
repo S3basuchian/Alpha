@@ -28,7 +28,7 @@ a mixed edit stream (grow / add-edge / retract / constrain) to stress *search*-s
 *grounding / atom-store* reuse and sweeps the shot count. Its instances are `V E SHOTS` triples,
 so each (size, shots) pair is one table row (Shots column). With the uniform 300 s cap, its largest
 cells (4000/16000 at 20/40 shots) may time out on the cluster — those cells then report as
-`Timeout` (see the cell format below).
+`T(…)/M(…)` (see the cell format below).
 
 `reach` is the single-source reachability benchmark (positive `reachable/1` program) under a
 **full base + one edge per shot** protocol: shot 1 solves a near-full base graph (all but the last
@@ -86,8 +86,14 @@ the comparison 1:1 per sample. What the seed varies, per benchmark:
 **Cell format for time/mem-outs.** Each table cell is the mean seconds over a size's finished
 samples. If some samples time/mem-out (under the uniform **300 s** cap), the cell shows the mean of
 the finished ones followed by the count of failures in brackets, e.g. `1.23 (3)` = mean of the 7
-finished samples, 3 timed/mem-out. If **all** samples fail, the cell shows the failure kind
-(`Timeout` or `Memout`) instead of a number — never a silent average over a subset.
+finished samples, 3 timed/mem-out. If **all** samples fail, the cell shows
+`T(⟨mean wall s⟩)/M(⟨mean resident GB⟩)` instead of a number — the mean wall-clock time and mean
+resident memory at the kill, averaged over the failed samples. The two numbers make the cause
+self-evident: `T(305)/M(44)` = ran the full clock (runsolver's `-W` is 300 s + a few seconds grace)
+at 44 GB, i.e. a **timeout**; `T(128)/M(64)` = died at 128 s pinned against the 64 GB
+`--rss-swap-limit`, i.e. a **memout**. The memory figure is runsolver's *resident* `Max. memory`,
+never `Max. virtual memory` (which under `-Xmx60g` is a ~65 GB address reservation, not RAM used).
+`results_long.csv` additionally carries the raw per-run `wall_s` / `mem_gb`.
 
 ## Prerequisites on the cluster
 
