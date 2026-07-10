@@ -98,12 +98,18 @@ SPEC = {
 RE_KV = {k: re.compile(rf"^RESULT_{k}=(.*)$", re.M)
          for k in ("BENCH", "CONFIG", "INSTANCE", "SECONDS")}
 
-# runsolver / solver failure markers -> status classification.
-TIMEOUT_MARKERS = ("Maximum wall clock time exceeded", "Maximum CPU time exceeded",
-                   "Maximum wall-clock time exceeded", "TIMEOUT", "time limit")
-MEMOUT_MARKERS = ("Maximum VSize exceeded", "Maximum memory exceeded", "out of memory",
-                  "OutOfMemoryError", "std::bad_alloc", "bad_alloc", "MEMOUT",
-                  "Cannot allocate memory")
+# Failure classification is two-tier. runsolver is authoritative about WHY it killed a run: it
+# enforces the caps and kills for exactly one reason, writing exactly one of these lines. Its verdict
+# therefore wins over any incidental memory text the dying solver printed on its way out (e.g. a JVM
+# logging OutOfMemoryError under -Xmx60g while runsolver's wall-clock is what actually killed it).
+RUNSOLVER_TIMEOUT = ("Maximum wall clock time exceeded", "Maximum wall-clock time exceeded",
+                     "Maximum CPU time exceeded")
+RUNSOLVER_MEMOUT = ("Maximum VSize exceeded", "Maximum memory exceeded")
+# Fallback markers, consulted ONLY when runsolver left no verdict (the solver died on its own before
+# hitting a cap). Broad substrings, so they must never override runsolver's own kill reason above.
+FALLBACK_MEMOUT = ("OutOfMemoryError", "std::bad_alloc", "bad_alloc", "out of memory",
+                   "Cannot allocate memory", "MEMOUT")
+FALLBACK_TIMEOUT = ("TIMEOUT", "time limit")
 
 
 def _read(path):
@@ -115,17 +121,23 @@ def _read(path):
 
 
 def classify_failure(run_dir):
-    """Scan every file in the run dir (besides the parsed stdout) for a timeout/memout marker."""
-    blob = ""
-    for p in glob(os.path.join(run_dir, "*")):
-        if os.path.isfile(p):
-            blob += _read(p)
-    for m in MEMOUT_MARKERS:
-        if m in blob:
-            return "Memout"
-    for m in TIMEOUT_MARKERS:
-        if m in blob:
-            return "Timeout"
+    """Classify a run that produced no RESULT_SECONDS as Timeout / Memout / err.
+
+    Scans every file in the run dir (including stdout.log). runsolver's authoritative kill reason is
+    checked FIRST, so an incidental memory marker in the solver's own output can no longer flip a
+    genuine timeout to Memout; the broad fallback markers are consulted only when runsolver killed
+    nothing (the solver died on its own)."""
+    blob = "".join(_read(p) for p in glob(os.path.join(run_dir, "*")) if os.path.isfile(p))
+    # 1) runsolver's authoritative verdict (mutually exclusive; trust it over any other text).
+    if any(m in blob for m in RUNSOLVER_TIMEOUT):
+        return "Timeout"
+    if any(m in blob for m in RUNSOLVER_MEMOUT):
+        return "Memout"
+    # 2) runsolver didn't cap it -> solver died on its own; best-effort from its output.
+    if any(m in blob for m in FALLBACK_MEMOUT):
+        return "Memout"
+    if any(m in blob for m in FALLBACK_TIMEOUT):
+        return "Timeout"
     return "err"
 
 
@@ -198,10 +210,13 @@ def cell(by_size, config, size):
     n = b["n_samples"]
     finished = len(b["vals"])
     if finished == 0:
-        # Every sample timed/mem-out: report the failure kind (prefer Memout, then Timeout).
-        if "Memout" in b["status"]:
+        # Every sample failed: report the failure kind that most of the samples hit. A tie (or an
+        # all-Timeout set) resolves to Timeout — we would rather under- than over-report Memout.
+        n_mem = b["status"].count("Memout")
+        n_time = b["status"].count("Timeout")
+        if n_mem > n_time:
             return "Memout"
-        if "Timeout" in b["status"]:
+        if n_time > 0:
             return "Timeout"
         return "err"
     mean = statistics.mean(b["vals"])
@@ -235,14 +250,28 @@ def latex_table(bench, by_size):
     head += "MSS & Rebuilt & Rebuilt & MSS \\\\"
     out.append(head)
     out.append(r"    \midrule")
+    # Collapse consecutive rows sharing a row-head label (the shots variants of one size) into a
+    # single \multirow spanning cell; \addlinespace separates the multi-row blocks. Tables without a
+    # shots column have unique labels, so every group is size 1 and this renders exactly as before.
+    groups = []
     for key, disp, extra in s["rows"]:
-        cells = [cell(by_size, c, key) for c in CONFIG_COLS]
-        cells = ["{--}" if c is None else c for c in cells]
-        row = f"    {disp} & "
-        if has_extra:
-            row += f"{extra} & "
-        row += " & ".join(cells) + r" \\"
-        out.append(row)
+        if groups and groups[-1][0] == disp:
+            groups[-1][1].append((key, extra))
+        else:
+            groups.append((disp, [(key, extra)]))
+    for gi, (disp, members) in enumerate(groups):
+        if gi and (len(groups[gi - 1][1]) > 1 or len(members) > 1):
+            out.append(r"    \addlinespace")
+        n = len(members)
+        for mi, (key, extra) in enumerate(members):
+            cells = [cell(by_size, cfg, key) for cfg in CONFIG_COLS]
+            cells = ["{--}" if v is None else v for v in cells]
+            if has_extra:
+                head_cell = "" if mi else (rf"\multirow{{{n}}}{{*}}{{{disp}}}" if n > 1 else disp)
+                row = f"    {head_cell} & {extra} & " + " & ".join(cells) + r" \\"
+            else:
+                row = f"    {disp} & " + " & ".join(cells) + r" \\"
+            out.append(row)
     out.append(r"    \bottomrule")
     out.append(r"  \end{tabular}")
     if bench == "coloring":
@@ -292,6 +321,7 @@ def main():
         w.writerow(["benchmark", "instance"] + [COL_HEADER[c] for c in CONFIG_COLS])
         w.writerows(wide_rows)
     with open(os.path.join(outdir, "tables.tex"), "w") as fh:
+        fh.write(r"% Requires \usepackage{booktabs} and \usepackage{multirow} in the preamble." + "\n")
         fh.write("\n\n".join(tex) + "\n")
 
     print(f"wrote {os.path.join(outdir, 'results_long.csv')}  ({len(long_rows)} runs)")

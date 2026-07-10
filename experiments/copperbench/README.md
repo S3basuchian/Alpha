@@ -99,6 +99,18 @@ finished samples, 3 timed/mem-out. If **all** samples fail, the cell shows the f
 
 ## Usage
 
+**One-shot:** to wipe old results, rebuild + regenerate, and generate+submit all five benchmarks in
+one go, run (honors the same `PARTITION`/`NUM_SAMPLES`/`BASE_SEED` env overrides):
+
+```bash
+bash experiments/copperbench/run-all.sh
+# ... wait for the SLURM jobs to finish, then:
+python3 experiments/copperbench/postprocess/collect.py
+```
+
+It does **not** cancel jobs still queued from an earlier submission — cancel those first if any are
+running. The manual steps it wraps are below.
+
 ```bash
 # 0. from the repo root, on the cluster head node
 #    (override cluster fields if they differ from copperbench's defaults)
