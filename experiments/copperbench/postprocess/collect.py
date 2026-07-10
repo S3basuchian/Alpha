@@ -8,16 +8,16 @@ Usage (from wherever the copperbench <name>/ output folders live — normally th
 with BENCH in {groundexp, cutedge, reach, coloring, coloring-grow} (default: all). For each
 benchmark it reads every <name>/<config>/<instance>/run*/ directory, extracts the solver's
 self-reported overall runtime (the `RESULT_SECONDS=` line the wrappers print — the same
-"overall runtime" the paper reports, excluding JVM/gradle startup), and classifies missing
-results as Timeout / Memout from the runsolver summary (wall time vs resident-memory at the kill).
+"overall runtime" the paper reports, excluding JVM/gradle startup); a run that produced no
+RESULT_SECONDS was killed by runsolver and is reported as Memout.
 
 Each instance SIZE is run on NUM_SAMPLES independently-seeded random instances (the RESULT_INSTANCE
 carries a `-s<seed>` suffix). Aggregation is two-level, matching the paper: within one sample take
 the median across any repeated runs, then report the MEAN over the size's samples (the paper
 averages over 10 random instances). A cell with some samples unfinished reports the mean over the
-finished ones and a `note:` line to stderr; a cell with none finished reports `T(<mean wall s>)/
-M(<mean resident GB>)` — e.g. `T(305)/M(44)` = hit the 305 s clock at 44 GB (a timeout); `T(128)/
-M(64)` = died at 128 s pinned against the 64 GB cap (a memout).
+finished ones and a `note:` line to stderr; a cell with none finished reports `Memout`. When both of
+a solver's two columns (Alpha MSS+Rebuilt, or clingo Rebuilt+MSS) are Memout, they are merged into a
+single `\multicolumn{2}{c}{Memout}` in the LaTeX table.
 
 Outputs (into the results dir):
     results_long.csv   one row per (benchmark, config, instance-with-seed, run): seconds / status
@@ -100,32 +100,9 @@ SPEC = {
 RE_KV = {k: re.compile(rf"^RESULT_{k}=(.*)$", re.M)
          for k in ("BENCH", "CONFIG", "INSTANCE", "SECONDS")}
 
-# Failure classification is driven by runsolver's end-of-run summary, which reports the two facts we
-# need directly and in a stable format:
-#     Real time (s): <wall seconds>
-#     Max. memory (cumulated for all children) (KiB): <resident KiB>
-# copperbench enforces exactly two caps here -- wall clock (timeout 300 s; runsolver -W adds a few
-# seconds of grace, so real timeouts land at ~305 s) and RSS+Swap (mem_limit 64000 MiB = 64 GB) --
-# and a genuine memout is killed BEFORE the wall cap, so "reached the wall cap => timeout" is
-# reliable and the numbers alone classify the run. We read resident memory ("Max. memory"), NEVER
-# "Max. virtual memory": under -Xmx60g the JVM reserves a ~65 GB virtual address space that has
-# nothing to do with the RAM actually used.
-RE_WALL = re.compile(r"^Real time \(s\):\s*([0-9.]+)", re.M)
-RE_MAXMEM = re.compile(r"^Max\. memory \(cumulated for all children\) \(KiB\):\s*(\d+)", re.M)
-
-WALL_CAP_S = 300      # copperbench timeout; a killed run whose wall time reaches this hit the clock
-MEM_CAP_GB = 64       # runsolver --rss-swap-limit (64000 MiB); a run pinned near this hit the RAM cap
-WALL_TIMEOUT_S = WALL_CAP_S       # >= this wall time => timeout (grace pushes real timeouts to ~305 s)
-MEM_MEMOUT_GB = 0.90 * MEM_CAP_GB  # >= this resident use, having died before the wall cap => memout
-
-# Textual fallbacks, consulted ONLY if the runsolver summary is missing (e.g. runsolver itself was
-# killed). Broad substrings, so they never override the summary numbers above.
-RUNSOLVER_TIMEOUT = ("Maximum wall clock time exceeded", "Maximum wall-clock time exceeded",
-                     "Maximum CPU time exceeded")
-RUNSOLVER_MEMOUT = ("Maximum VSize exceeded", "Maximum memory exceeded")
-FALLBACK_MEMOUT = ("OutOfMemoryError", "std::bad_alloc", "bad_alloc", "out of memory",
-                   "Cannot allocate memory", "MEMOUT")
-FALLBACK_TIMEOUT = ("TIMEOUT", "time limit")
+# Every run that finishes emits its own RESULT_SECONDS. A run that produced none was killed by
+# runsolver, and the only failure mode in these benchmarks is running out of memory (clingo blowing
+# up on eager grounding, the JVM exhausting its heap, ...), so every such run is reported as Memout.
 
 
 def _read(path):
@@ -136,40 +113,9 @@ def _read(path):
         return ""
 
 
-def runsolver_stats(blob):
-    """(wall_seconds, resident_GB) from the runsolver summary; each None if its field is absent.
-    KiB -> GB as /1024/1000 so the figure is directly comparable to the 64 GB (=64000 MiB) cap."""
-    t = RE_WALL.search(blob)
-    m = RE_MAXMEM.search(blob)
-    wall = float(t.group(1)) if t else None
-    mem = int(m.group(1)) / 1024 / 1000 if m else None
-    return wall, mem
-
-
-def classify_failure(blob, wall_s, mem_gb):
-    """Classify a run with no RESULT_SECONDS as Timeout / Memout / err.
-
-    Primary signal is the runsolver summary: reaching the wall cap means memory never exceeded (a
-    memout is killed earlier), so wall-first is safe; a sub-cap death pinned near the memory cap is a
-    memout; anything else that died early is a non-resource crash (err). The textual markers are only
-    a fallback for when the summary is missing entirely."""
-    if wall_s is not None and wall_s >= WALL_TIMEOUT_S:
-        return "Timeout"
-    if mem_gb is not None and mem_gb >= MEM_MEMOUT_GB:
-        return "Memout"
-    if any(x in blob for x in RUNSOLVER_TIMEOUT):
-        return "Timeout"
-    if any(x in blob for x in RUNSOLVER_MEMOUT) or any(x in blob for x in FALLBACK_MEMOUT):
-        return "Memout"
-    if any(x in blob for x in FALLBACK_TIMEOUT):
-        return "Timeout"
-    return "err"
-
-
 def parse_run(run_dir):
-    """Return (config, instance, seconds_or_None, status, wall_s, mem_gb) for one run<k>/ directory.
-    wall_s / mem_gb come from the runsolver summary and are populated only for FAILED runs (an OK run
-    reports its own RESULT_SECONDS and needs no resource-limit accounting)."""
+    """Return (config, instance, seconds_or_None, status) for one run<k>/ directory. A run with no
+    RESULT_SECONDS was killed by runsolver -> Memout (the only failure mode these benchmarks hit)."""
     stdout = _read(os.path.join(run_dir, "stdout.log"))
     cfg = RE_KV["CONFIG"].search(stdout)
     inst = RE_KV["INSTANCE"].search(stdout)
@@ -177,30 +123,23 @@ def parse_run(run_dir):
     config = cfg.group(1).strip() if cfg else None
     instance = inst.group(1).strip() if inst else None
     if secs:
-        return config, instance, float(secs.group(1)), "ok", None, None
-    blob = "".join(_read(p) for p in glob(os.path.join(run_dir, "*")) if os.path.isfile(p))
-    wall_s, mem_gb = runsolver_stats(blob)
-    return config, instance, None, classify_failure(blob, wall_s, mem_gb), wall_s, mem_gb
+        return config, instance, float(secs.group(1)), "ok"
+    return config, instance, None, "Memout"
 
 
 def collect_benchmark(results_dir, bench):
-    """{(config, instance): {'secs','status','runs','wall','mem'}} over all runs. 'wall'/'mem' are
-    per-run and lockstep with 'runs'/'status': None for an OK run, wall-seconds / resident-GB for a
-    failed one."""
+    """{(config, instance): {'secs': [floats], 'status': [strs], 'runs': [dirs]}} over all runs."""
     agg = {}
     for stdout_path in glob(os.path.join(results_dir, bench, "**", "run*", "stdout.log"),
                             recursive=True):
         run_dir = os.path.dirname(stdout_path)
-        config, instance, secs, status, wall_s, mem_gb = parse_run(run_dir)
+        config, instance, secs, status = parse_run(run_dir)
         if config is None or instance is None:
             print(f"  warn: could not identify {run_dir} (no RESULT_ lines)", file=sys.stderr)
             continue
-        d = agg.setdefault((config, instance),
-                           {"secs": [], "status": [], "runs": [], "wall": [], "mem": []})
+        d = agg.setdefault((config, instance), {"secs": [], "status": [], "runs": []})
         d["runs"].append(run_dir)
         d["status"].append(status)
-        d["wall"].append(wall_s)
-        d["mem"].append(mem_gb)
         if secs is not None:
             d["secs"].append(secs)
     return agg
@@ -218,49 +157,52 @@ def sample_value(d):
 
 
 def reduce_by_size(agg):
-    """Collapse {(config, instance): {...}} to {(config, size): {'vals','status','n_samples','wall','mem'}}
-    by grouping a size's random samples. 'vals' holds one value per finished sample (median over its
-    runs); 'n_samples' counts all samples; 'status' accumulates every run's status; 'wall'/'mem' hold
-    the runsolver wall-seconds / resident-GB of the FAILED runs (for the T(..)/M(..) all-failed cell)."""
+    """Collapse {(config, instance): {...}} to {(config, size): {'vals', 'n_samples'}} by grouping a
+    size's random samples. 'vals' holds one value per finished sample (median over its runs);
+    'n_samples' counts all samples (so a fully-failed size has 'vals' empty)."""
     by_size = {}
     for (config, instance), d in agg.items():
-        b = by_size.setdefault((config, size_of(instance)),
-                               {"vals": [], "status": [], "n_samples": 0, "wall": [], "mem": []})
+        b = by_size.setdefault((config, size_of(instance)), {"vals": [], "n_samples": 0})
         b["n_samples"] += 1
         v = sample_value(d)
         if v is not None:
             b["vals"].append(v)
-        b["status"].extend(d["status"])
-        b["wall"].extend(x for x in d["wall"] if x is not None)
-        b["mem"].extend(x for x in d["mem"] if x is not None)
     return by_size
 
 
 def cell(by_size, config, size):
     """One table cell: mean seconds over the size's finished random samples, with a trailing
-    ``(N)`` when N of the samples timed/mem-out (e.g. ``1.23 (3)`` = mean of the 7 finished, 3 failed).
-    If *every* sample failed, ``T(<mean wall s>)/M(<mean resident GB>)`` is shown instead. ``None``
-    means the config was not run for this benchmark."""
+    ``(N)`` when N of the samples mem-out (e.g. ``1.23 (3)`` = mean of the 7 finished, 3 failed).
+    If *every* sample failed, ``Memout`` is shown instead. ``None`` means the config was not run
+    for this benchmark."""
     b = by_size.get((config, size))
     if b is None:
         return None  # config not run for this benchmark (e.g. coloring clingo-mss)
     n = b["n_samples"]
     finished = len(b["vals"])
     if finished == 0:
-        # Every sample failed. Show the mean wall-time / mean resident-memory at the kill as
-        # T(seconds)/M(GB): the numbers say which cap was hit (T near 305 => clock, M near 64 => RAM)
-        # far more transparently than a bare word, and stay honest for a mixed timeout+memout size.
-        # Pure non-resource crashes (no Timeout/Memout among the samples) stay "err".
-        if b["status"].count("Timeout") or b["status"].count("Memout"):
-            t = f"{statistics.mean(b['wall']):.0f}" if b["wall"] else "?"
-            m = f"{statistics.mean(b['mem']):.0f}" if b["mem"] else "?"
-            return f"T({t})/M({m})"
-        return "err"
+        return "Memout"  # every sample mem-out
     mean = statistics.mean(b["vals"])
     failed = n - finished
     if failed == 0:
         return f"{mean:.2f}"
-    return f"{mean:.2f} ({failed})"  # mean over finished samples; N samples timed/mem-out
+    return f"{mean:.2f} ({failed})"  # mean over finished samples; N samples mem-out
+
+
+def render_numeric_cells(by_size, key):
+    """The four solver columns for one row as a LaTeX fragment. When BOTH of a solver's columns
+    (Alpha = MSS+Rebuilt, clingo = Rebuilt+MSS) are Memout, they collapse into a single centered
+    ``\\multicolumn{2}{c}{Memout}``; a column not run for the benchmark renders as ``{--}``."""
+    raw = [cell(by_size, cfg, key) for cfg in CONFIG_COLS]
+    parts = []
+    for lo in (0, 2):  # the two solver column-pairs, in CONFIG_COLS order
+        a, b = raw[lo], raw[lo + 1]
+        if a == "Memout" and b == "Memout":
+            parts.append(r"\multicolumn{2}{c}{Memout}")
+        else:
+            parts.append("{--}" if a is None else a)
+            parts.append("{--}" if b is None else b)
+    return " & ".join(parts)
 
 
 def latex_table(bench, by_size):
@@ -301,13 +243,12 @@ def latex_table(bench, by_size):
             out.append(r"    \addlinespace")
         n = len(members)
         for mi, (key, extra) in enumerate(members):
-            cells = [cell(by_size, cfg, key) for cfg in CONFIG_COLS]
-            cells = ["{--}" if v is None else v for v in cells]
+            numeric = render_numeric_cells(by_size, key)
             if has_extra:
                 head_cell = "" if mi else (rf"\multirow{{{n}}}{{*}}{{{disp}}}" if n > 1 else disp)
-                row = f"    {head_cell} & {extra} & " + " & ".join(cells) + r" \\"
+                row = f"    {head_cell} & {extra} & " + numeric + r" \\"
             else:
-                row = f"    {disp} & " + " & ".join(cells) + r" \\"
+                row = f"    {disp} & " + numeric + r" \\"
             out.append(row)
     out.append(r"    \bottomrule")
     out.append(r"  \end{tabular}")
@@ -337,14 +278,12 @@ def main():
         for (config, instance), d in sorted(agg.items()):
             for i, rd in enumerate(d["runs"]):
                 sv = d["secs"][i] if i < len(d["secs"]) else ""
-                wv = f"{d['wall'][i]:.2f}" if d["wall"][i] is not None else ""
-                mv = f"{d['mem'][i]:.2f}" if d["mem"][i] is not None else ""
-                long_rows.append([bench, config, instance, i + 1, sv, wv, mv, d["status"][i], rd])
+                long_rows.append([bench, config, instance, i + 1, sv, d["status"][i], rd])
         for key, disp, _ in SPEC[bench]["rows"]:
             wide_rows.append([bench, disp] + [cell(by_size, c, key) or "" for c in CONFIG_COLS])
         tex.append(latex_table(bench, by_size))
-        # Surface partially-finished cells (some samples timed/mem-out): the reported mean is over
-        # the finished samples only — never silently hide the dropped ones.
+        # Surface partially-finished cells (some samples mem-out): the reported mean is over the
+        # finished samples only — never silently hide the dropped ones.
         for (config, size), b in sorted(by_size.items()):
             if b["vals"] and len(b["vals"]) < b["n_samples"]:
                 print(f"  note: {bench} {config} {size}: {len(b['vals'])}/{b['n_samples']} "
@@ -353,8 +292,7 @@ def main():
     outdir = args.results_dir
     with open(os.path.join(outdir, "results_long.csv"), "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["benchmark", "config", "instance", "run", "seconds", "wall_s", "mem_gb",
-                    "status", "run_dir"])
+        w.writerow(["benchmark", "config", "instance", "run", "seconds", "status", "run_dir"])
         w.writerows(long_rows)
     with open(os.path.join(outdir, "results_wide.csv"), "w", newline="") as fh:
         w = csv.writer(fh)

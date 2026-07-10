@@ -83,17 +83,15 @@ the comparison 1:1 per sample. What the seed varies, per benchmark:
 | `coloring` / `coloring-grow` | base graph **+** the model-dependent edit stream | clingo replays Alpha's per-shot program dump, produced from that seed |
 | `cutedge`   | the random **graph** only | each solver still drives its **own** answer-set cut sequence on that shared graph (own-sequence methodology — the encoding's `delete` is an arbitrary single edge, so the sequences may diverge; this is intentional and unchanged) |
 
-**Cell format for time/mem-outs.** Each table cell is the mean seconds over a size's finished
-samples. If some samples time/mem-out (under the uniform **300 s** cap), the cell shows the mean of
-the finished ones followed by the count of failures in brackets, e.g. `1.23 (3)` = mean of the 7
-finished samples, 3 timed/mem-out. If **all** samples fail, the cell shows
-`T(⟨mean wall s⟩)/M(⟨mean resident GB⟩)` instead of a number — the mean wall-clock time and mean
-resident memory at the kill, averaged over the failed samples. The two numbers make the cause
-self-evident: `T(305)/M(44)` = ran the full clock (runsolver's `-W` is 300 s + a few seconds grace)
-at 44 GB, i.e. a **timeout**; `T(128)/M(64)` = died at 128 s pinned against the 64 GB
-`--rss-swap-limit`, i.e. a **memout**. The memory figure is runsolver's *resident* `Max. memory`,
-never `Max. virtual memory` (which under `-Xmx60g` is a ~65 GB address reservation, not RAM used).
-`results_long.csv` additionally carries the raw per-run `wall_s` / `mem_gb`.
+**Cell format for mem-outs.** Each table cell is the mean seconds over a size's finished samples.
+A run that produces no `RESULT_SECONDS` was killed by runsolver; the only failure mode these
+benchmarks hit is memory (clingo blowing up on eager grounding, the JVM exhausting its heap), so
+every such run is reported as **Memout**. If some samples of a size mem-out (under the **64 GB** cap),
+the cell shows the mean of the finished ones followed by the count of failures in brackets, e.g.
+`1.23 (3)` = mean of the 7 finished samples, 3 mem-out. If **all** samples fail, the cell shows
+`Memout` instead of a number. When **both** of a solver's two columns are Memout — Alpha
+(MSS + Rebuilt) or clingo (Rebuilt + MSS) — they merge into a single centered
+`\multicolumn{2}{c}{Memout}` spanning that solver's pair.
 
 ## Prerequisites on the cluster
 
