@@ -9,8 +9,8 @@
 # solver's own "overall runtime" (summed over shots, matching the paper methodology,
 # excluding JVM/gradle startup) as a single canonical line:
 #     RESULT_SECONDS=<float>
-# On a mem-out the process is killed by runsolver (only the 64 GB memory cap is enforced; the
-# wall-clock limit is set huge on purpose) before that line is printed, so its absence marks a Memout.
+# On a time-out (30 min wall) or mem-out (64 GB) the process is killed by runsolver before that line
+# is printed, so its absence marks a Timeout/Memout cell (collect.py reads which cap was hit).
 
 set -u
 

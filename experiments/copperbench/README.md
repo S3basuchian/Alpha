@@ -27,8 +27,8 @@ a mixed edit stream (grow / add-edge / retract / constrain) to stress *search*-s
 `coloring-grow` uses `rotation=grow` (each shot adds one pendant vertex + edge) to isolate
 *grounding / atom-store* reuse and sweeps the shot count. Its instances are `V E SHOTS` triples,
 so each (size, shots) pair is one table row (Shots column). Its largest cells (4000/16000 at 20/40
-shots) may exhaust the 64 GB cap on the cluster — those cells then report as `Memout` (see the cell
-format below).
+shots) may exceed the 30 min or 64 GB cap on the cluster — those cells then report as `Timeout` /
+`Memout` (see the cell format below).
 
 `reach` is the single-source reachability benchmark (positive `reachable/1` program) under a
 **full base + one edge per shot** protocol: shot 1 solves a near-full base graph (all but the last
@@ -50,14 +50,15 @@ Each table has four solver columns, produced by four copperbench *configs*:
 
 The reported number is each solver's **own overall runtime** summed over the shots (the
 `RESULT_SECONDS=` line the wrappers print) — the same quantity the paper reports, and it
-excludes JVM/gradle startup. `runsolver` enforces the memory limit and marks the Memout cells.
+excludes JVM/gradle startup. `runsolver` enforces the time and memory limits and marks the
+Timeout/Memout cells.
 
 ## Experimental parameters (baked into the `*.json.in` templates)
 
 | | |
 |---|---|
-| timeout    | **82 800 s (23 h)** wall-clock per run — deliberately huge so it is *not* the binding limit: with only memory enforced, an unfinished run is a genuine **memout**, not a timeout. The sunnycove partition MaxTime is `infinite` (`sinfo -p sunnycove -o %l`), so the queue imposes no cap — the *only* constraint is a copperbench quirk: it renders SLURM's `--time` from a Python `timedelta` (`timeout + ~35 s` on this cluster), which formats anything **≥ 1 day** as `"1 day, 0:00:35"` — a string `sbatch` rejects (`Invalid directive … day,`). So `timeout` must keep `--time` under a day; **23 h → `--time=23:00:35`**, an hour of margin under the boundary. A run that somehow hits even this cap is still reported `Memout`, but the cap sits far above any real memout timescale (minutes). To go higher you'd have to patch copperbench to emit SLURM's `D-HH:MM:SS` day format |
-| memory     | **64 GB** per run — the runsolver `--rss-swap-limit`, and now the *only* binding cap (Alpha JVM, or the clingo subprocess whose eager grounding can blow up on cutedge O(V³) / groundexp) |
+| timeout    | **1 800 s (30 min)** wall-clock per run — a real binding limit again: an unfinished run is a `Timeout` if it ran (almost) to this cap, else a `Memout`. copperbench renders SLURM's `--time` from a Python `timedelta` (`timeout + ~35 s` here → `0:30:35`); keep `timeout` under **86 365 s** or the ≥ 1 day render (`"1 day, …"`) makes `sbatch` reject the script — not a concern at 30 min. The sunnycove partition MaxTime is `infinite`, so the queue imposes no extra cap |
+| memory     | **64 GB** per run — the runsolver `--rss-swap-limit` (Alpha JVM, or the clingo subprocess whose eager grounding can blow up on cutedge O(V³) / groundexp) |
 | java heap  | **`-Xmx60g -XX:MaxRAM=64000M`** — Alpha's Java heap uses the full node memory, kept a few GB under the 64 GB cap so a blow-up trips runsolver (Memout) rather than a premature JVM OOM. Override via `JVM_XMX` |
 | samples    | **10** random instances per size (`NUM_SAMPLES`, seeds `BASE_SEED..BASE_SEED+9`, default `42..51`); the postprocessor reports the **mean over the samples** — matching the paper's "averaged over 10 instances" |
 | repetitions| **1** run per (config, sample) — the 10 samples are the variance estimate. Raise `runs` in a `*.json.in` for extra timing-noise repetitions; the postprocessor then takes the per-sample median before averaging |
@@ -83,15 +84,16 @@ the comparison 1:1 per sample. What the seed varies, per benchmark:
 | `coloring` / `coloring-grow` | base graph **+** the model-dependent edit stream | clingo replays Alpha's per-shot program dump, produced from that seed |
 | `cutedge`   | the random **graph** only | each solver still drives its **own** answer-set cut sequence on that shared graph (own-sequence methodology — the encoding's `delete` is an arbitrary single edge, so the sequences may diverge; this is intentional and unchanged) |
 
-**Cell format for mem-outs.** Each table cell is the mean seconds over a size's finished samples.
-A run that produces no `RESULT_SECONDS` was killed by runsolver; the only failure mode these
-benchmarks hit is memory (clingo blowing up on eager grounding, the JVM exhausting its heap), so
-every such run is reported as **Memout**. If some samples of a size mem-out (under the **64 GB** cap),
-the cell shows the mean of the finished ones followed by the count of failures in brackets, e.g.
-`1.23 (3)` = mean of the 7 finished samples, 3 mem-out. If **all** samples fail, the cell shows
-`Memout` instead of a number. When **both** of a solver's two columns are Memout — Alpha
-(MSS + Rebuilt) or clingo (Rebuilt + MSS) — they merge into a single centered
-`\multicolumn{2}{c}{Memout}` spanning that solver's pair.
+**Cell format for time/mem-outs.** Each table cell is the mean seconds over a size's finished
+samples. A run that produces no `RESULT_SECONDS` was killed by runsolver; it is a **Timeout** if it
+ran (almost) to the 30 min wall limit, else a **Memout** (its resident memory was at the 64 GB cap) —
+whichever cap it hit first, read from the runsolver log. If **some** samples of a size fail, the cell
+shows the mean of the finished ones followed by the count of failures in brackets, e.g. `1.23 (3)` =
+mean of the 7 finished samples, 3 failed — **the bracket count does not distinguish timeout from
+memout**. If **all** samples fail, the cell shows the failure kind (`Timeout` or `Memout`, whichever
+most samples hit) instead of a number. When **both** of a solver's two columns show the *same* kind —
+Alpha (MSS + Rebuilt) or clingo (Rebuilt + MSS) — they merge into a single centered
+`\multicolumn{2}{c}{<kind>}` spanning that solver's pair.
 
 ## Prerequisites on the cluster
 

@@ -9,15 +9,16 @@ with BENCH in {groundexp, cutedge, reach, coloring, coloring-grow} (default: all
 benchmark it reads every <name>/<config>/<instance>/run*/ directory, extracts the solver's
 self-reported overall runtime (the `RESULT_SECONDS=` line the wrappers print — the same
 "overall runtime" the paper reports, excluding JVM/gradle startup); a run that produced no
-RESULT_SECONDS was killed by runsolver and is reported as Memout.
+RESULT_SECONDS was killed by runsolver and is reported as Timeout or Memout — whichever cap (the
+wall-clock limit or the RSS+Swap memory limit) it hit first, read from the runsolver log.
 
 Each instance SIZE is run on NUM_SAMPLES independently-seeded random instances (the RESULT_INSTANCE
 carries a `-s<seed>` suffix). Aggregation is two-level, matching the paper: within one sample take
 the median across any repeated runs, then report the MEAN over the size's samples (the paper
 averages over 10 random instances). A cell with some samples unfinished reports the mean over the
-finished ones and a `note:` line to stderr; a cell with none finished reports `Memout`. When both of
-a solver's two columns (Alpha MSS+Rebuilt, or clingo Rebuilt+MSS) are Memout, they are merged into a
-single `\multicolumn{2}{c}{Memout}` in the LaTeX table.
+finished ones and a `note:` line to stderr; a cell with none finished reports `Timeout` or `Memout`.
+When both of a solver's two columns (Alpha MSS+Rebuilt, or clingo Rebuilt+MSS) show the same kind,
+they are merged into a single `\multicolumn{2}{c}{<kind>}` in the LaTeX table.
 
 Outputs (into the results dir):
     results_long.csv   one row per (benchmark, config, instance-with-seed, run): seconds / status
@@ -100,9 +101,23 @@ SPEC = {
 RE_KV = {k: re.compile(rf"^RESULT_{k}=(.*)$", re.M)
          for k in ("BENCH", "CONFIG", "INSTANCE", "SECONDS")}
 
-# Every run that finishes emits its own RESULT_SECONDS. A run that produced none was killed by
-# runsolver, and the only failure mode in these benchmarks is running out of memory (clingo blowing
-# up on eager grounding, the JVM exhausting its heap, ...), so every such run is reported as Memout.
+# A run that finishes emits its own RESULT_SECONDS. A run that produced none was killed by runsolver,
+# which enforces two caps -- a wall-clock time limit (-W) and an RSS+Swap memory limit -- and we
+# classify by which one it hit *first*, straight from its log. The startup preamble echoes both
+# limits and the end-of-run summary reports the actuals:
+#     Enforcing wall clock limit ...: <N> seconds        Real time (s): <wall>
+#     Enforcing RSS+Swap limit ...: <N> KiB              Max. memory (cumulated for all children) (KiB): <rss>
+# A memout is killed the instant RSS hits the cap, always before the wall limit, so "ran (almost) to
+# the wall limit" => Timeout; otherwise "RSS (almost) at the cap" => Memout. Parsing the *enforced*
+# limits per run keeps this correct whatever -W actually is. Resident "Max. memory", never "Max.
+# virtual memory" (a ~65 GB JVM -Xmx60g address reservation, not RAM actually used).
+RE_REAL = re.compile(r"^Real time \(s\):\s*([0-9.]+)", re.M)
+RE_MAXMEM = re.compile(r"^Max\. memory \(cumulated for all children\) \(KiB\):\s*(\d+)", re.M)
+RE_WALL_LIMIT = re.compile(r"Enforcing wall clock limit[^:]*:\s*(\d+)\s*seconds")
+RE_MEM_LIMIT = re.compile(r"Enforcing (?:RSS\+Swap|VSize|memory) limit[^:]*:\s*(\d+)\s*KiB")
+
+WALL_HIT = 0.95   # wall time >= this fraction of the enforced wall limit => Timeout
+MEM_HIT = 0.90    # resident mem >= this fraction of the enforced memory limit => Memout
 
 
 def _read(path):
@@ -113,9 +128,28 @@ def _read(path):
         return ""
 
 
+def classify_failure(blob):
+    """Classify a killed run (no RESULT_SECONDS) as Timeout / Memout / err from the runsolver log."""
+    real = RE_REAL.search(blob)
+    maxmem = RE_MAXMEM.search(blob)
+    wlim = RE_WALL_LIMIT.search(blob)
+    mlim = RE_MEM_LIMIT.search(blob)
+    wall = float(real.group(1)) if real else None
+    mem = int(maxmem.group(1)) if maxmem else None       # resident KiB
+    wall_limit = int(wlim.group(1)) if wlim else None    # seconds
+    mem_limit = int(mlim.group(1)) if mlim else None     # KiB
+    # Ran (almost) to the wall limit -> Timeout (a memout would have been killed earlier).
+    if wall is not None and wall_limit and wall >= WALL_HIT * wall_limit:
+        return "Timeout"
+    # Killed before the wall limit with RSS (almost) at the cap -> Memout.
+    if mem is not None and mem_limit and mem >= MEM_HIT * mem_limit:
+        return "Memout"
+    return "err"  # died early without hitting either cap, or no runsolver summary
+
+
 def parse_run(run_dir):
     """Return (config, instance, seconds_or_None, status) for one run<k>/ directory. A run with no
-    RESULT_SECONDS was killed by runsolver -> Memout (the only failure mode these benchmarks hit)."""
+    RESULT_SECONDS was killed by runsolver -> Timeout or Memout (whichever cap it hit first)."""
     stdout = _read(os.path.join(run_dir, "stdout.log"))
     cfg = RE_KV["CONFIG"].search(stdout)
     inst = RE_KV["INSTANCE"].search(stdout)
@@ -124,7 +158,8 @@ def parse_run(run_dir):
     instance = inst.group(1).strip() if inst else None
     if secs:
         return config, instance, float(secs.group(1)), "ok"
-    return config, instance, None, "Memout"
+    blob = "".join(_read(p) for p in glob(os.path.join(run_dir, "*")) if os.path.isfile(p))
+    return config, instance, None, classify_failure(blob)
 
 
 def collect_benchmark(results_dir, bench):
@@ -157,48 +192,58 @@ def sample_value(d):
 
 
 def reduce_by_size(agg):
-    """Collapse {(config, instance): {...}} to {(config, size): {'vals', 'n_samples'}} by grouping a
-    size's random samples. 'vals' holds one value per finished sample (median over its runs);
-    'n_samples' counts all samples (so a fully-failed size has 'vals' empty)."""
+    """Collapse {(config, instance): {...}} to {(config, size): {'vals', 'n_samples', 'status'}} by
+    grouping a size's random samples. 'vals' holds one value per finished sample (median over its
+    runs); 'n_samples' counts all samples (so a fully-failed size has 'vals' empty); 'status'
+    accumulates every run's status (for the Timeout/Memout kind of an all-failed cell)."""
     by_size = {}
     for (config, instance), d in agg.items():
-        b = by_size.setdefault((config, size_of(instance)), {"vals": [], "n_samples": 0})
+        b = by_size.setdefault((config, size_of(instance)),
+                               {"vals": [], "n_samples": 0, "status": []})
         b["n_samples"] += 1
         v = sample_value(d)
         if v is not None:
             b["vals"].append(v)
+        b["status"].extend(d["status"])
     return by_size
 
 
 def cell(by_size, config, size):
     """One table cell: mean seconds over the size's finished random samples, with a trailing
-    ``(N)`` when N of the samples mem-out (e.g. ``1.23 (3)`` = mean of the 7 finished, 3 failed).
-    If *every* sample failed, ``Memout`` is shown instead. ``None`` means the config was not run
-    for this benchmark."""
+    ``(N)`` when N of the samples failed (e.g. ``1.23 (3)`` = mean of the 7 finished, 3 timed/mem-out
+    — the bracket count does not distinguish the two). If *every* sample failed, the failure kind
+    (``Timeout`` or ``Memout``, whichever most samples hit) is shown instead. ``None`` means the
+    config was not run for this benchmark."""
     b = by_size.get((config, size))
     if b is None:
         return None  # config not run for this benchmark (e.g. coloring clingo-mss)
     n = b["n_samples"]
     finished = len(b["vals"])
     if finished == 0:
-        return "Memout"  # every sample mem-out
+        # Every sample failed: report the kind most samples hit (tie -> Timeout).
+        n_time = b["status"].count("Timeout")
+        n_mem = b["status"].count("Memout")
+        if n_time == 0 and n_mem == 0:
+            return "err"
+        return "Timeout" if n_time >= n_mem else "Memout"
     mean = statistics.mean(b["vals"])
     failed = n - finished
     if failed == 0:
         return f"{mean:.2f}"
-    return f"{mean:.2f} ({failed})"  # mean over finished samples; N samples mem-out
+    return f"{mean:.2f} ({failed})"  # mean over finished samples; N samples timed/mem-out
 
 
 def render_numeric_cells(by_size, key):
     """The four solver columns for one row as a LaTeX fragment. When BOTH of a solver's columns
-    (Alpha = MSS+Rebuilt, clingo = Rebuilt+MSS) are Memout, they collapse into a single centered
-    ``\\multicolumn{2}{c}{Memout}``; a column not run for the benchmark renders as ``{--}``."""
+    (Alpha = MSS+Rebuilt, clingo = Rebuilt+MSS) show the *same* all-failed kind (both Timeout or both
+    Memout), they collapse into a single centered ``\\multicolumn{2}{c}{<kind>}``; a column not run
+    for the benchmark renders as ``{--}``."""
     raw = [cell(by_size, cfg, key) for cfg in CONFIG_COLS]
     parts = []
     for lo in (0, 2):  # the two solver column-pairs, in CONFIG_COLS order
         a, b = raw[lo], raw[lo + 1]
-        if a == "Memout" and b == "Memout":
-            parts.append(r"\multicolumn{2}{c}{Memout}")
+        if a == b and a in ("Timeout", "Memout"):
+            parts.append(rf"\multicolumn{{2}}{{c}}{{{a}}}")
         else:
             parts.append("{--}" if a is None else a)
             parts.append("{--}" if b is None else b)
