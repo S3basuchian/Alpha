@@ -5,7 +5,7 @@
     "instances": "__REPO_ROOT__/experiments/copperbench/groundexp.instances",
     "instances_are_parameters": true,
     "working_dir": "__REPO_ROOT__",
-    "timeout": 86384,
+    "timeout": 82800,
     "mem_limit": 64000,
     "request_cpus": 1,
     "runs": 1,
