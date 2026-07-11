@@ -275,7 +275,7 @@ def latex_table(bench, by_size):
     out.append(head)
     out.append(r"    \midrule")
     # Collapse consecutive rows sharing a row-head label (the shots variants of one size) into a
-    # single \multirow spanning cell; \addlinespace separates the multi-row blocks. Tables without a
+    # single \multirow spanning cell; \hline separates the multi-row blocks. Tables without a
     # shots column have unique labels, so every group is size 1 and this renders exactly as before.
     groups = []
     for key, disp, extra in s["rows"]:
@@ -285,7 +285,7 @@ def latex_table(bench, by_size):
             groups.append((disp, [(key, extra)]))
     for gi, (disp, members) in enumerate(groups):
         if gi and (len(groups[gi - 1][1]) > 1 or len(members) > 1):
-            out.append(r"    \addlinespace")
+            out.append(r"    \hline")
         n = len(members)
         for mi, (key, extra) in enumerate(members):
             numeric = render_numeric_cells(by_size, key)
