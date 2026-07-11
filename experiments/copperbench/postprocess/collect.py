@@ -101,23 +101,17 @@ SPEC = {
 RE_KV = {k: re.compile(rf"^RESULT_{k}=(.*)$", re.M)
          for k in ("BENCH", "CONFIG", "INSTANCE", "SECONDS")}
 
-# A run that finishes emits its own RESULT_SECONDS. A run that produced none was killed by runsolver,
-# which enforces two caps -- a wall-clock time limit (-W) and an RSS+Swap memory limit -- and we
-# classify by which one it hit *first*, straight from its log. The startup preamble echoes both
-# limits and the end-of-run summary reports the actuals:
+# A run that finishes emits its own RESULT_SECONDS. A run that produced none was killed -- by
+# runsolver hitting a cap, or by the OS/SLURM OOM-killer. runsolver enforces a wall-clock time limit
+# (-W) whose value it echoes in the startup preamble and whose actual it reports at the end:
 #     Enforcing wall clock limit ...: <N> seconds        Real time (s): <wall>
-#     Enforcing RSS+Swap limit ...: <N> KiB              Max. memory (cumulated for all children) (KiB): <rss>
-# A memout is killed the instant RSS hits the cap, always before the wall limit, so "ran (almost) to
-# the wall limit" => Timeout; otherwise "RSS (almost) at the cap" => Memout. Parsing the *enforced*
-# limits per run keeps this correct whatever -W actually is. Resident "Max. memory", never "Max.
-# virtual memory" (a ~65 GB JVM -Xmx60g address reservation, not RAM actually used).
+# Only a clear "ran (almost) to the wall limit" signature is a Timeout; every other kill is treated
+# as a Memout (RSS at the cap, or an OOM-kill that bypassed runsolver's soft accounting and left no
+# clean summary). Parsing the *enforced* wall limit per run keeps this correct whatever -W actually is.
 RE_REAL = re.compile(r"^Real time \(s\):\s*([0-9.]+)", re.M)
-RE_MAXMEM = re.compile(r"^Max\. memory \(cumulated for all children\) \(KiB\):\s*(\d+)", re.M)
 RE_WALL_LIMIT = re.compile(r"Enforcing wall clock limit[^:]*:\s*(\d+)\s*seconds")
-RE_MEM_LIMIT = re.compile(r"Enforcing (?:RSS\+Swap|VSize|memory) limit[^:]*:\s*(\d+)\s*KiB")
 
 WALL_HIT = 0.95   # wall time >= this fraction of the enforced wall limit => Timeout
-MEM_HIT = 0.90    # resident mem >= this fraction of the enforced memory limit => Memout
 
 
 def _read(path):
@@ -129,22 +123,17 @@ def _read(path):
 
 
 def classify_failure(blob):
-    """Classify a killed run (no RESULT_SECONDS) as Timeout / Memout / err from the runsolver log."""
+    """Classify a killed run (no RESULT_SECONDS) as Timeout / Memout from the runsolver log. Only a
+    clear ran-to-the-wall-limit signature counts as Timeout; every other kill (RSS at the cap, or an
+    early death / OOM-kill that bypassed runsolver's soft accounting) is reported as Memout."""
     real = RE_REAL.search(blob)
-    maxmem = RE_MAXMEM.search(blob)
     wlim = RE_WALL_LIMIT.search(blob)
-    mlim = RE_MEM_LIMIT.search(blob)
     wall = float(real.group(1)) if real else None
-    mem = int(maxmem.group(1)) if maxmem else None       # resident KiB
     wall_limit = int(wlim.group(1)) if wlim else None    # seconds
-    mem_limit = int(mlim.group(1)) if mlim else None     # KiB
     # Ran (almost) to the wall limit -> Timeout (a memout would have been killed earlier).
     if wall is not None and wall_limit and wall >= WALL_HIT * wall_limit:
         return "Timeout"
-    # Killed before the wall limit with RSS (almost) at the cap -> Memout.
-    if mem is not None and mem_limit and mem >= MEM_HIT * mem_limit:
-        return "Memout"
-    return "err"  # died early without hitting either cap, or no runsolver summary
+    return "Memout"  # anything else that got killed -> treat as running out of memory
 
 
 def parse_run(run_dir):
@@ -220,11 +209,10 @@ def cell(by_size, config, size):
     n = b["n_samples"]
     finished = len(b["vals"])
     if finished == 0:
-        # Every sample failed: report the kind most samples hit (tie -> Timeout).
+        # Every sample failed: report the kind most samples hit (tie -> Timeout). classify_failure
+        # only ever yields Timeout or Memout, so one of these counts is nonzero.
         n_time = b["status"].count("Timeout")
         n_mem = b["status"].count("Memout")
-        if n_time == 0 and n_mem == 0:
-            return "err"
         return "Timeout" if n_time >= n_mem else "Memout"
     mean = statistics.mean(b["vals"])
     failed = n - finished
