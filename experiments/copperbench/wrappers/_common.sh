@@ -9,8 +9,8 @@
 # solver's own "overall runtime" (summed over shots, matching the paper methodology,
 # excluding JVM/gradle startup) as a single canonical line:
 #     RESULT_SECONDS=<float>
-# On timeout / mem-out the process is killed by runsolver before that line is printed,
-# so its absence (together with the runsolver watcher file) marks the Timeout/Memout cells.
+# On a mem-out the process is killed by runsolver (only the 64 GB memory cap is enforced; the
+# wall-clock limit is set huge on purpose) before that line is printed, so its absence marks a Memout.
 
 set -u
 

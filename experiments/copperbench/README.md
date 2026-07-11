@@ -26,9 +26,9 @@ timing repetition here (all `NUM_SAMPLES` samples of a size are identical) — r
 a mixed edit stream (grow / add-edge / retract / constrain) to stress *search*-state reuse, while
 `coloring-grow` uses `rotation=grow` (each shot adds one pendant vertex + edge) to isolate
 *grounding / atom-store* reuse and sweeps the shot count. Its instances are `V E SHOTS` triples,
-so each (size, shots) pair is one table row (Shots column). With the uniform 300 s cap, its largest
-cells (4000/16000 at 20/40 shots) may time out on the cluster — those cells then report as
-`T(…)/M(…)` (see the cell format below).
+so each (size, shots) pair is one table row (Shots column). Its largest cells (4000/16000 at 20/40
+shots) may exhaust the 64 GB cap on the cluster — those cells then report as `Memout` (see the cell
+format below).
 
 `reach` is the single-source reachability benchmark (positive `reachable/1` program) under a
 **full base + one edge per shot** protocol: shot 1 solves a near-full base graph (all but the last
@@ -50,14 +50,14 @@ Each table has four solver columns, produced by four copperbench *configs*:
 
 The reported number is each solver's **own overall runtime** summed over the shots (the
 `RESULT_SECONDS=` line the wrappers print) — the same quantity the paper reports, and it
-excludes JVM/gradle startup. `runsolver` enforces the limits and marks the Timeout/Memout cells.
+excludes JVM/gradle startup. `runsolver` enforces the memory limit and marks the Memout cells.
 
 ## Experimental parameters (baked into the `*.json.in` templates)
 
 | | |
 |---|---|
-| timeout    | **300 s** wall-clock per run (uniform across all benchmarks) |
-| memory     | **64 GB** per run — the runsolver cap for the *whole* job (Alpha JVM, or the clingo subprocess whose eager grounding can blow up on cutedge O(V³) / groundexp) |
+| timeout    | **86 400 s (24 h)** wall-clock per run — deliberately huge so it is *not* the binding limit: with only memory enforced, an unfinished run is a genuine **memout**, not a timeout. copperbench derives runsolver's `-W` (`timeout + 10 s`) and SLURM's `--time` (`timeout + 15 s`) from it, so this value must stay **≤ the sunnycove partition's MaxTime** (`sinfo -p sunnycove -o %l`); lower it if the partition rejects 24 h jobs. A run that somehow hits even this cap is still reported `Memout` — pick a cap comfortably above any real memout timescale |
+| memory     | **64 GB** per run — the runsolver `--rss-swap-limit`, and now the *only* binding cap (Alpha JVM, or the clingo subprocess whose eager grounding can blow up on cutedge O(V³) / groundexp) |
 | java heap  | **`-Xmx60g -XX:MaxRAM=64000M`** — Alpha's Java heap uses the full node memory, kept a few GB under the 64 GB cap so a blow-up trips runsolver (Memout) rather than a premature JVM OOM. Override via `JVM_XMX` |
 | samples    | **10** random instances per size (`NUM_SAMPLES`, seeds `BASE_SEED..BASE_SEED+9`, default `42..51`); the postprocessor reports the **mean over the samples** — matching the paper's "averaged over 10 instances" |
 | repetitions| **1** run per (config, sample) — the 10 samples are the variance estimate. Raise `runs` in a `*.json.in` for extra timing-noise repetitions; the postprocessor then takes the per-sample median before averaging |

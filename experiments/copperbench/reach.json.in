@@ -5,7 +5,7 @@
     "instances": "__REPO_ROOT__/experiments/copperbench/reach.instances",
     "instances_are_parameters": true,
     "working_dir": "__REPO_ROOT__",
-    "timeout": 300,
+    "timeout": 86400,
     "mem_limit": 64000,
     "request_cpus": 1,
     "runs": 1,
