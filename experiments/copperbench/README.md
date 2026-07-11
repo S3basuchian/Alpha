@@ -36,8 +36,9 @@ shots) may exceed the 30 min or 64 GB cap on the cluster — those cells then re
 reach analog of `coloring-grow`: the incremental session (`alpha-mss`) pays only a 1-edge delta per
 shot while every rebuild baseline re-grounds the whole graph each shot. Instances are `V Emult
 SHOTS` triples swept at 10/20/40 shots (Shots column), so each (size, shots) pair is one row.
-`clingo-mss` must pre-declare the `V²` node-pair edge universe, so it memouts on the 10000-vertex
-sizes (viability cap) and is only viable at `V=1000`.
+`clingo-mss` streams edges into one long-lived `Control` via incremental `add`+`ground` with **no
+externals** — the fair apples-to-apples with Alpha's session (no V² node-pair universe, so no
+artefactual memout; a blow-up here would be a genuine one).
 
 Each table has four solver columns, produced by four copperbench *configs*:
 
@@ -167,9 +168,13 @@ jobs never race to create one:
 All four columns of every table are produced, including `coloring` clingo-MSS. Since the repo had
 no multi-shot clingo driver for colouring, `examples/coloring/clingo-coloring-mss.py` was added: it
 reconstructs each shot's edit by diffing consecutive program dumps and replays them against one
-long-lived clingo `Control` (vertices grounded once as they grow, edges as toggleable `#external`
-so retraction flips them false, forbid constraints `:- cK(v).` grounded as they appear). Validated
-to produce the identical per-shot SAT/UNSAT sequence as the rebuilt driver.
+long-lived clingo `Control` (vertices grounded once as they grow; forbid constraints `:- cK(v).`
+grounded as they appear). Edges use a two-pass split so externals are used **only where needed**: a
+pre-scan finds which edges are ever *retracted* — those become toggleable `#external e(a,b)`, every
+other edge is a plain fact `e(a,b)`. In the monotone `grow` rotation nothing is ever retracted, so
+every edge is a fact and no external overhead is paid (the same fairness principle as the reach
+add+ground driver; externals-for-never-retracted-edges cost clingo ~7–13% for nothing). Validated to
+produce the identical per-shot SAT/UNSAT sequence as the rebuilt and externals-only drivers.
 
 ## Layout
 

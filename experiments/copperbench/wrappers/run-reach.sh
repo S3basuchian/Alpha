@@ -25,7 +25,6 @@ announce reach "$V-$EMULT-$SHOTS-s$SEED"
 RE="$EXAMPLES/reach"
 ENCODING="$RE/encoding.lp"
 EDGES="$RE/instances/edges-rand-v$V-e$E-s$SEED.lp"
-CAP="${MSS_CAP:-4000000}"          # clingo-MSS viability cap: |V|^2 <= CAP (10000-node -> not viable)
 MAIN="IncrementalReachBenchmark"
 
 [[ -f "$EDGES" ]] || { mkdir -p "$RE/instances"; "$PYTHON" "$RE/gen-random-graph.py" --vertices "$V" --edges "$E" --seed "$SEED" > "$EDGES"; }
@@ -62,11 +61,13 @@ case "$CONFIG" in
     ;;
 
   clingo-mss)
+    # clingo multi-shot: one long-lived Control, edges streamed in via incremental add+ground
+    # (NO externals) — the fair apples-to-apples with Alpha's session. Shot 1 solves the near-full
+    # base; each later shot appends one edge and re-grounds the recursion, reusing solver state.
+    # No V^2 external universe, so no artefactual memout: a blow-up now means a genuine one, caught
+    # by runsolver like any other config.
     LOG="$(mktemp)"; trap 'rm -f "$LOG"' EXIT
-    "$PYTHON" "$RE/clingo-multishot.py" --one-edge "$ENCODING" "$EDGES" "$SHOTS" "$CAP" 2>&1 | tee "$LOG"
-    if grep -q 'not viable' "$LOG"; then
-        echo "clingo MSS not viable (|V|^2 > $CAP) -> Memout" >&2; exit 0   # no RESULT line: postprocess -> Memout
-    fi
+    "$PYTHON" "$RE/clingo-multishot.py" --one-edge "$ENCODING" "$EDGES" "$SHOTS" 2>&1 | tee "$LOG"
     secs="$(grab_seconds 'total clingo MSS wall time \(incl. base setup\):' "$LOG")"
     [[ -n "$secs" ]] && emit "$secs"
     ;;

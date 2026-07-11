@@ -34,7 +34,7 @@ examples/reach/
 │   └── edges-reach1*.lp                # legacy Omiga-grid subsets (for encoding-tc-query.lp)
 ├── bench-reach-sweep.sh                # ★ default: four-way sweep across the grid (live / batch / clingo / clingo-MSS)
 ├── bench-incremental.sh                # single-instance per-shot detail (Alpha live vs clingo vs batch Alpha)
-├── clingo-multishot.py                 # clingo multi-shot (MSS) driver (viability-capped)
+├── clingo-multishot.py                 # clingo multi-shot (MSS) driver (incremental add+ground, no externals)
 └── README.md                           # this file
 ```
 
@@ -110,34 +110,44 @@ their own facts).
 
 | instance | edges | inc Alpha | batch Alpha | clingo | clingo MSS | paper Alpha | paper clingo |
 | -------- | ----: | --------: | ----------: | -----: | ---------: | ----------: | -----------: |
-| 1000/4  |  4 000 | **0.18 s** | 0.65 s |  0.91 s | 54.8 s | 2.13 s | 0.11 s |
-| 1000/8  |  8 000 | **0.25 s** | 1.12 s |  1.16 s | 26.0 s | 3.19 s | 0.21 s |
-| 10000/2 | 20 000 | **0.55 s** | 1.79 s |  1.72 s | **FAIL** | 10.95 s | 0.52 s |
-| 10000/4 | 40 000 | **1.17 s** | 5.28 s |  2.82 s | **FAIL** | 13.06 s | 1.09 s |
-| 10000/8 | 80 000 | **2.32 s** | 14.25 s | 4.86 s | **FAIL** | 16.62 s | 2.27 s |
+| 1000/4  |  4 000 | 0.24 s | 0.72 s |  0.88 s | **0.03 s** | 2.13 s | 0.11 s |
+| 1000/8  |  8 000 | 0.47 s | 1.23 s |  1.06 s | **0.05 s** | 3.19 s | 0.21 s |
+| 10000/2 | 20 000 | 0.66 s | 1.73 s |  1.65 s | **0.12 s** | 10.95 s | 0.52 s |
+| 10000/4 | 40 000 | 1.72 s | 5.03 s |  2.68 s | **0.29 s** | 13.06 s | 1.09 s |
+| 10000/8 | 80 000 | 3.90 s | 12.56 s | 4.69 s | **0.61 s** | 16.62 s | 2.27 s |
 
 (Apple Silicon laptop, clingo 5.8.0, OpenJDK 17, seed 0, 25 shots/instance.)
-Incremental Alpha wins every instance: **2.1–5.1× over rebuilt clingo, 3.2–6.1×
-over batch Alpha**. The four left columns are the same per-instance stream; the
-two right columns are the paper's single-shot Table-5 solves (independent
-instances, 2018 cluster — reference only).
+Incremental Alpha still beats both rebuild baselines (**~1.4–3.6× over rebuilt
+clingo, ~2.9–3.2× over batch Alpha**), but with a *fair* clingo MSS — incremental
+`add`+`ground`, no externals — **clingo MSS is the fastest column on every
+instance** (~6–8× faster than incremental Alpha). The earlier "MSS = 26–55 s /
+FAIL" figures came from the retired V²-external strawman and are not a real clingo
+limitation. On this positive, search-free program lazy grounding buys Alpha
+little, so well-encoded clingo wins; state retention is what lets *Alpha* beat
+rebuilt clingo and batch Alpha. The four left columns are the same per-instance
+stream; the two right columns are the paper's single-shot Table-5 solves
+(independent instances, 2018 cluster — reference only).
 
 The four modes:
 
 - **inc Alpha** — one live `AlphaSession`, solver + grounder state retained across shots.
 - **batch Alpha** — session rebuilt from scratch each shot (same JVM).
 - **clingo** — clingo re-invoked from scratch each shot.
-- **clingo MSS** — clingo multi-shot: one long-lived `Control`, every edge a ground
-  `#external edge(a,b)`, recursion grounded once over `#external edge(X,Y):node(X),node(Y)`.
+- **clingo MSS** — clingo multi-shot: one long-lived `Control`, edges streamed in
+  via incremental `add`+`ground` with **no externals** (each shot appends the new
+  edge(s) plus the recursive rule; the solver reuses its state across shots).
 
-**What the MSS column shows.** At V = 1000 the external universe is 10⁶ atoms:
-MSS runs, but every solve drags that whole program, so it is **100–300× slower**
-than lazy Alpha (tens of seconds). At V = 10 000 the universe would be **10⁸**
-edge externals — the cutedge/groundexp grounding wall — and MSS is not viable at
-all (`clingo-multishot.py` bails above a 4 M-external cap). This is the crux:
-streaming reachability wants *lazy* grounding. Alpha discovers new node ids
-straight from the edges it is given; MSS must pre-declare the node universe and
-pay V² for it, whether or not those edges ever appear.
+**What the MSS column shows.** This is the *fair* apples-to-apples with Alpha's
+session: like Alpha, clingo here learns each edge only when it arrives, with no
+knowledge of future edges, and keeps its learned nogoods and heuristics across
+shots. (An earlier version of this driver instead reserved the whole edge
+relation as `#external edge(X,Y):node(X),node(Y)` — a V² = 10⁸-atom universe on a
+10 000-node graph — which memouted. That was an artefact of the *external*
+encoding, not a real clingo limitation: externals are a retraction tool, and the
+reach stream only ever *adds* edges. Declaring the whole node-pair universe when
+almost none of those edges appear is the strawman we removed.) The genuine cost
+of the honest idiom is re-grounding the recursive rule each shot so the
+transitive-closure cascade reaches through old and new edges alike.
 
 **The single-shot verdict reverses under streaming.** In the paper's batch
 Table 5, clingo beats Alpha on every row (positive program, no grounding
@@ -153,8 +163,8 @@ shots is what flips it.
   \small
   \caption{Streaming single-source reachability: each instance streamed from an
     empty graph over 25 shots. Total wall-clock in seconds. MSS = one long-lived
-    session/control; rebuilt = fresh each shot. Memout = clingo MSS must ground
-    the recursion over the full $V^2$ node-pair universe.}
+    session/control retaining state across shots; rebuilt = fresh each shot. Both
+    MSS columns are incremental with no pre-declared edge universe.}
   \label{tab:reach}
   \begin{tabular}{rrrrr}
     \toprule
@@ -163,21 +173,22 @@ shots is what flips it.
     \cmidrule(lr){4-5}
     $V/m$ & MSS & rebuilt & rebuilt & MSS \\
     \midrule
-    1000/4   & 0.18  & 0.65  & 0.91 & 54.79 \\
-    1000/8   & 0.25  & 1.12  & 1.16 & 26.02 \\
-    10000/2  & 0.55  & 1.79  & 1.72 & \multicolumn{1}{c}{Memout} \\
-    10000/4  & 1.17  & 5.28  & 2.82 & \multicolumn{1}{c}{Memout} \\
-    10000/8  & 2.32  & 14.25 & 4.86 & \multicolumn{1}{c}{Memout} \\
+    1000/4   & 0.24 & 0.72  & 0.88 & 0.03 \\
+    1000/8   & 0.47 & 1.23  & 1.06 & 0.05 \\
+    10000/2  & 0.66 & 1.73  & 1.65 & 0.12 \\
+    10000/4  & 1.72 & 5.03  & 2.68 & 0.29 \\
+    10000/8  & 3.90 & 12.56 & 4.69 & 0.61 \\
     \bottomrule
   \end{tabular}
 \end{table}
 ```
 
 `$V/m$` is vertices / edge-multiplier (reach's second number is a multiplier, not
-a density %). `MSS` maps to the live incremental `AlphaSession`; `rebuilt` to the
-from-scratch session. Only clingo MSS memouts (the 10 000-node universe needs 10⁸
-edge externals); clingo rebuilt survives every size, so `Memout` sits in that one
-cell rather than spanning both clingo columns.
+a density %). `MSS` maps to the live incremental session (`AlphaSession` for
+Alpha, one long-lived `Control` for clingo); `rebuilt` to the from-scratch
+baseline. State retention makes each MSS column beat its own rebuilt baseline; on
+this positive, search-free program clingo's MSS is the fastest overall, since
+lazy grounding gives Alpha little edge when nearly every ground rule fires anyway.
 
 ### Incremental stays flat as the stream lengthens
 
@@ -214,19 +225,24 @@ closure expands fastest while the reachable set is still growing) and then
 quiesces to a few milliseconds per shot as later edges only trigger small local
 joins. Every rebuild baseline instead grows monotonically with cumulative edges.
 
-## Why "incremental clingo" doesn't help here
+## How "incremental clingo" is done here
 
-This is the `clingo MSS` column above, driven by `clingo-multishot.py`. clingo's
-multi-shot Python API requires declaring the edge relation as `#external` over the
-node universe (which grounds the recursive rule over that universe upfront —
-O(V²) here), because re-adding the encoding in a subprogram is rejected due to
-atom-ID re-declaration. Neither gives clingo what `AlphaSession` gives Alpha for
-free: a grounder that accepts new facts *and new node ids* without re-grounding
-existing rules, and a solver that resumes from dl = 0 with its working memory
-intact. So MSS is 100–300× slower where it runs (V = 1000) and not viable at all
-where the node universe is large (V = 10 000 → 10⁸ externals). Rebuilt-each-shot
-is the workable clingo baseline; MSS is included to show the multi-shot failure
-mode directly.
+This is the `clingo MSS` column above, driven by `clingo-multishot.py`. The
+honest multi-shot idiom for an *add-only* stream is incremental `add`+`ground`
+with no externals: each shot appends the new edge(s) as facts together with the
+recursive rule in a fresh subprogram, so gringo re-instantiates `reachable/1`
+over the current edge set while the solver keeps its learned nogoods and
+heuristics. (Re-supplying the rule each shot is necessary because clingo does not
+re-fire an earlier subprogram's rules against facts added later; it is also the
+genuine cost of not knowing future edges.) This is a real, viable clingo baseline
+— no V² universe, no memout — and it is what a competent clingo user would write.
+It still does not give clingo everything `AlphaSession` gives Alpha for free: a
+lazy grounder that only realises the ground rules the search actually needs. On
+this *positive* reachability program that lazy advantage is small — nearly every
+edge-rule fires anyway — which is exactly why well-encoded clingo MSS is
+competitive here (and why reachability is the wrong benchmark to demonstrate a
+grounding wall; see `examples/groundexp` for one where lazy grounding wins
+decisively).
 
 ## What state retention does on this benchmark
 

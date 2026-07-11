@@ -46,14 +46,16 @@ public final class IncrementalReachBenchmark {
 
 		String encoding = Files.readString(encodingPath);
 		List<String> edgeLines = readNonBlankLines(edgesPath);
-		// -Dreach.oneEdgeShots: start from a (near-)full base graph and add exactly ONE edge per shot,
-		// instead of streaming the whole graph in over numShots equal chunks. The base (all but the last
-		// numShots edges) is solved in shot 1; each subsequent shot adds a single edge. This makes batch
-		// re-ground the WHOLE graph every shot (max cost) while live pays only a 1-edge delta — the reach
-		// analog of the coloring "grow" protocol.
+		// -Dreach.oneEdgeShots: start from a (near-)full base graph and add edges per shot, instead of
+		// streaming the whole graph in over numShots equal chunks. The base (all but the last
+		// numShots*edgesPerShot edges) is solved in shot 1; each subsequent shot adds -Dreach.edgesPerShot
+		// edges (default 1). This makes batch re-ground the WHOLE graph every shot (max cost) while live
+		// pays only the per-shot delta — the reach analog of the coloring "grow" protocol. edgesPerShot lets
+		// us vary the per-shot increment while holding the final graph and shot count fixed.
 		boolean oneEdgeShots = Boolean.getBoolean("reach.oneEdgeShots");
+		int edgesPerShot = Integer.getInteger("reach.edgesPerShot", 1);
 		List<List<String>> chunks = oneEdgeShots
-				? splitBasePlusSingletons(edgeLines, numShots)
+				? splitBasePlusChunks(edgeLines, numShots, edgesPerShot)
 				: splitIntoChunks(edgeLines, numShots);
 
 		Alpha alpha = newAlpha();
@@ -123,18 +125,21 @@ public final class IncrementalReachBenchmark {
 	}
 
 	/**
-	 * Build shots for the "full base + one edge per shot" protocol: shot 1 is the whole graph except its
-	 * last {@code numSingleShots} edges (the base), and each of the following {@code numSingleShots} shots
-	 * adds exactly one held-out edge. Total shots = {@code numSingleShots + 1}. If the graph has fewer than
-	 * {@code numSingleShots} edges the base is empty and every edge becomes its own shot.
+	 * Build shots for the "full base + k edges per shot" protocol: shot 1 is the whole graph except its
+	 * last {@code numShots * edgesPerShot} edges (the base), and each of the following {@code numShots}
+	 * shots adds {@code edgesPerShot} held-out edges. Total shots = {@code numShots + 1}. If the graph has
+	 * fewer than {@code numShots * edgesPerShot} edges the base is empty and the held-out edges are chunked
+	 * into groups of {@code edgesPerShot} (the last chunk may be smaller). {@code edgesPerShot = 1}
+	 * reproduces the original one-edge-per-shot protocol exactly.
 	 */
-	private static List<List<String>> splitBasePlusSingletons(List<String> items, int numSingleShots) {
+	private static List<List<String>> splitBasePlusChunks(List<String> items, int numShots, int edgesPerShot) {
+		int perShot = Math.max(1, edgesPerShot);
 		int n = items.size();
-		int baseCount = Math.max(0, n - numSingleShots);
+		int baseCount = Math.max(0, n - numShots * perShot);
 		List<List<String>> chunks = new ArrayList<>();
 		chunks.add(new ArrayList<>(items.subList(0, baseCount))); // shot 1: the (near-)full base graph
-		for (int i = baseCount; i < n; i++) {
-			chunks.add(new ArrayList<>(items.subList(i, i + 1))); // one edge per subsequent shot
+		for (int i = baseCount; i < n; i += perShot) {
+			chunks.add(new ArrayList<>(items.subList(i, Math.min(i + perShot, n)))); // k edges per subsequent shot
 		}
 		return chunks;
 	}

@@ -7,9 +7,9 @@
 #   inc Alpha   - one live AlphaSession, solver retained across shots
 #   batch Alpha - AlphaSession rebuilt from scratch each shot (same JVM)
 #   clingo      - clingo re-invoked from scratch each shot
-#   clingo MSS  - clingo multi-shot: one long-lived Control, edges as externals
-#                 (grounds the recursion over O(V^2) node pairs -> fails on the
-#                 10000-node sizes; see clingo-multishot.py)
+#   clingo MSS  - clingo multi-shot: one long-lived Control, edges streamed via
+#                 incremental add+ground with NO externals (the fair apples-to-
+#                 apples with Alpha's session; see clingo-multishot.py)
 #
 # The paper's single-shot Table-5 numbers (independent instances, 2018 cluster)
 # are shown on the right as a reference only.
@@ -26,7 +26,6 @@ REPO_ROOT="$(cd "$ROOT/../.." && pwd)"
 ENCODING="$ROOT/encoding.lp"
 CLINGO="${CLINGO:-clingo}"
 SHOTS="${SHOTS:-25}"
-CAP="${MSS_CAP:-4000000}"
 
 # grid entry = file:label:edges
 GRID=(
@@ -82,12 +81,10 @@ run_clingo_rebuilt() {
     echo "$total"
 }
 
-# clingo multi-shot wall time, or FAIL if the node universe is not viable.
+# clingo multi-shot wall time (incremental add+ground, no externals).
 run_mss() {
-    local out
-    out=$(python3 "$ROOT/clingo-multishot.py" "$ENCODING" "$1" "$SHOTS" "$CAP" 2>&1)
-    if echo "$out" | grep -q 'not viable'; then echo "FAIL"
-    else echo "$out" | grep 'wall time' | sed -E 's/.*: ([0-9.]+)s.*/\1/'; fi
+    python3 "$ROOT/clingo-multishot.py" "$ENCODING" "$1" "$SHOTS" 2>&1 \
+        | grep 'wall time' | sed -E 's/.*: ([0-9.]+)s.*/\1/'
 }
 
 echo

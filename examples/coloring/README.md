@@ -20,7 +20,8 @@ examples/coloring/
 ├── encoding.lp              # the 5-colouring rules (one predicate per colour)
 ├── gen_coloring.py          # emit the base graph facts (faithful java.util.Random port)
 ├── clingo-coloring.py       # clingo driver: solve each dumped shot from scratch (rebuilt)
-├── bench-coloring-sweep.sh  # ★ default: sweep the paper Table-4 instance set
+├── bench-coloring-sweep.sh       # ★ default 1: mixed-edit "Table 4" colourability test
+├── bench-coloring-grow-sweep.sh  # ★ default 2: monotone-growth grounding/setup-reuse test
 └── README.md                # this file
 ```
 
@@ -125,3 +126,63 @@ over a heavier per-shot solve; (ii) clingo — with no grounding bottleneck here
 is faster in absolute terms, so this benchmark is about *Alpha-live vs
 Alpha-rebuilt*, i.e. the value of retaining solver state across mixed edits, not
 about beating clingo.
+
+## Monotone-growth variant (`bench-coloring-grow-sweep.sh`)
+
+The mixed-edit test above stresses **search** reuse under model-invalidating
+edits. This second default test isolates the complementary axis — **grounding /
+atom-store reuse** — under a purely **monotone** edit stream (`rotation=grow`):
+every shot adds one pendant vertex + one edge, which can never invalidate the
+current colouring.
+
+On the standard degree-8 random instances (`|E| = 4·|V|`, below the 5-colouring
+phase transition, so *easy* to colour) the per-shot cost is dominated not by
+search but by **building the ground program** — grounding + atom store + nogood
+store, `O(|V|+|E|)`. `Alpha Rebuilt` re-pays that full build **every shot**; the
+live session builds it **once** and re-solves warm (reusing grounder + atom store
++ learned nogoods). So the live advantage is setup reuse, and it grows along two
+axes:
+
+* **instance size** raises the per-shot ratio (batch-per-shot ÷ live-grow-shot):
+  ≈15× at \|V\|=1000, ≈25× at 2000, ≈32× at 4000 (bigger one-time build to reuse);
+* **shot count** amortises the one-time base solve toward that ratio.
+
+The sweep runs `rotation=grow` over sizes {1000, 2000, 4000} (`|E| = 4·|V|`) ×
+shot counts {10, 20, 40}, timing live vs a batch replay of the identical grow
+sequence:
+
+```sh
+./bench-coloring-grow-sweep.sh
+SIZES="1000" SHOTS_LIST="10 20" ./bench-coloring-grow-sweep.sh   # quick subset
+```
+
+### Results (Apple Silicon, OpenJDK 17, clingo 5.8.0, seed 42)
+
+Overall runtime in seconds over the shot count; the identical grow sequence is
+replayed by every solver:
+
+| \|V\|/\|E\|    | shots | Alpha MSS | Alpha Rebuilt | clingo Rebuilt | clingo MSS |
+|------------|------:|----------:|--------------:|---------------:|-----------:|
+| 1000/4000  |    10 |     1.73  |         8.61  |          0.42  |      0.39  |
+| 1000/4000  |    20 |     1.83  |        17.91  |          0.83  |      0.45  |
+| 1000/4000  |    40 |     2.15  |        33.62  |          1.65  |      0.54  |
+| 2000/8000  |    10 |     6.07  |        33.48  |          0.90  |      0.83  |
+| 2000/8000  |    20 |     6.23  |        68.29  |          1.75  |      0.95  |
+| 2000/8000  |    40 |     7.17  |       137.21  |          3.65  |      1.14  |
+| 4000/16000 |    10 |    26.19  |       175.58  |          2.17  |      1.78  |
+| 4000/16000 |    20 |    26.07  |       290.68  |          4.17  |      2.00  |
+| 4000/16000 |    40 |    27.04  |       658.83  |          8.69  |      2.52  |
+
+The mechanism is visible in the numbers: **the two MSS/incremental modes are
+nearly flat in the shot count** (they pay the base build once, then grow-shots
+are almost free — Alpha MSS 26.2→27.0 s, clingo MSS 1.78→2.52 s from 10→40
+shots at \|V\|=4000), while **both Rebuilt baselines scale linearly** (they
+re-build every shot — Alpha Rebuilt 175→659 s, clingo Rebuilt 2.2→8.7 s).
+
+For **Alpha**, MSS-over-Rebuilt is the headline: ~5–6.7× at 10 shots, crossing a
+magnitude by 20 shots (9.8–11.2×) and reaching **15–24×** at 40 shots (rising
+with both size and shots). clingo shows the same incremental effect (MSS ~3× its
+own Rebuilt) but is faster in absolute terms — these instances have no grounding
+bottleneck, so clingo pays no |dom|-style explosion; the benchmark's point is the
+*value of retaining state across monotone growth*, i.e. MSS vs Rebuilt within
+each solver, not Alpha vs clingo.

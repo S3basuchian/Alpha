@@ -8,8 +8,14 @@ driver reconstructs the per-shot edit by diffing consecutive dumps and replays i
 long-lived clingo Control, so grounding is incremental (each vertex / edge / forbid grounded once):
 
     vertices  grow-only  -> ground a `vertex(v)` program instance (its 5 colour-choice rules)
-    edges     toggleable -> `#external e(a,b)`; ground the 5 edge-colour constraints once, then
-                            assign the external true (added) / false (retracted)
+    edges                -> a two-pass split so externals are used ONLY where they are needed:
+                            a pre-scan finds which edges are ever RETRACTED; those are declared
+                            `#external e(a,b)` and toggled true/false; every other edge is a plain
+                            FACT `e(a,b)` (which lets gringo simplify it out of the 5 constraints).
+                            In a monotone rotation (`grow`) nothing is ever retracted, so every edge
+                            is a fact and no external overhead is paid — the fair analogue of the
+                            reach add+ground fix. Externals are a retraction tool; using them for
+                            never-retracted edges would needlessly slow clingo (~13% on grow).
     forbids   add-only   -> ground the ground constraint `:- cK(v).`
 
 Every shot solves for the first answer set (solve-first, like clingo-coloring.py rebuilt), so the
@@ -35,8 +41,18 @@ c3(v) :- not c1(v), not c2(v), not c4(v), not c5(v).
 c4(v) :- not c1(v), not c2(v), not c3(v), not c5(v).
 c5(v) :- not c1(v), not c2(v), not c3(v), not c4(v).
 """
-EDGE_TEMPLATE = """
+# Retractable edges: toggleable external (kept in the ground constraints so it can flip false).
+EDGE_EXT_TEMPLATE = """
 #external e(a,b).
+:- e(a,b), c1(a), c1(b).
+:- e(a,b), c2(a), c2(b).
+:- e(a,b), c3(a), c3(b).
+:- e(a,b), c4(a), c4(b).
+:- e(a,b), c5(a), c5(b).
+"""
+# Never-retracted edges: a plain fact; gringo simplifies e(a,b) out of the 5 constraints at ground time.
+EDGE_FACT_TEMPLATE = """
+e(a,b).
 :- e(a,b), c1(a), c1(b).
 :- e(a,b), c2(a), c2(b).
 :- e(a,b), c3(a), c3(b).
@@ -78,10 +94,24 @@ def main():
         print(f"no shot-*.lp in {dump_dir}", file=sys.stderr)
         sys.exit(3)
 
+    # wall0 before the pre-parse so the timed region still covers reading every shot exactly once,
+    # matching the original (which parsed one shot per timed iteration) — this isolates the
+    # facts-vs-externals change rather than also moving parsing out of the measurement.
     wall0 = time.time()
+
+    # Pre-scan: parse every shot once and find which edges are EVER retracted. Only those need to
+    # be toggleable externals; every other edge is a plain fact (grow-only => no externals at all).
+    parsed = [parse_shot(p) for p in shots]
+    ever_retracted = set()
+    _pe = set()
+    for (_cv, _ce, _cf) in parsed:
+        ever_retracted |= (_pe - _ce)
+        _pe = _ce
+
     ctl = clingo.Control(["--models=1"])
     ctl.add("vertex", ["v"], VERTEX_TEMPLATE)
-    ctl.add("edge", ["a", "b"], EDGE_TEMPLATE)
+    ctl.add("edge_ext", ["a", "b"], EDGE_EXT_TEMPLATE)
+    ctl.add("edge_fact", ["a", "b"], EDGE_FACT_TEMPLATE)
 
     grounded_v, grounded_e, forbid_n = set(), set(), 0
 
@@ -89,9 +119,12 @@ def main():
         ctl.ground([("vertex", [clingo.Number(v)])]); grounded_v.add(v)
 
     def ensure_edge(a, b, active):
+        retractable = (a, b) in ever_retracted
         if (a, b) not in grounded_e:
-            ctl.ground([("edge", [clingo.Number(a), clingo.Number(b)])]); grounded_e.add((a, b))
-        ctl.assign_external(clingo.Function("e", [clingo.Number(a), clingo.Number(b)]), active)
+            prog = "edge_ext" if retractable else "edge_fact"
+            ctl.ground([(prog, [clingo.Number(a), clingo.Number(b)])]); grounded_e.add((a, b))
+        if retractable:  # fact edges are never retracted, so there is nothing to toggle
+            ctl.assign_external(clingo.Function("e", [clingo.Number(a), clingo.Number(b)]), active)
 
     def add_forbid(v, c):
         nonlocal forbid_n
@@ -106,8 +139,8 @@ def main():
     prev_v, prev_e, prev_f = set(), set(), set()
     setup_secs = None
     solve_total = 0.0
-    for i, path in enumerate(shots):
-        cur_v, cur_e, cur_f = parse_shot(path)
+    for i, (cur_v, cur_e, cur_f) in enumerate(parsed):
+        t_ground0 = time.time()
         for v in sorted(cur_v - prev_v):
             ground_vertex(v)
         for (a, b) in sorted(cur_e - prev_e):        # added / (re)activated edges
@@ -117,7 +150,7 @@ def main():
         for (v, c) in sorted(cur_f - prev_f):        # new forbid constraints
             add_forbid(v, c)
         if i == 0:
-            setup_secs = time.time() - wall0        # grounding the base graph
+            setup_secs = time.time() - t_ground0    # grounding the base graph (shot 1)
 
         t0 = time.time()
         res = ctl.solve()

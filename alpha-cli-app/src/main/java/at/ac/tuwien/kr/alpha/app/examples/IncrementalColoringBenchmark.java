@@ -81,6 +81,14 @@ public final class IncrementalColoringBenchmark {
 	 */
 	private static final String ROTATION = System.getProperty("coloring.rotation", "mix");
 
+	/**
+	 * {@code -Dcoloring.growPerShot=k} (default 1): how many pendant (vertex + edge) pairs a single grow
+	 * shot adds before the one timed solve. Lets us vary the per-shot increment size in the monotone
+	 * {@code grow} protocol while holding the shot count fixed (the coloring analog of
+	 * {@code -Dreach.edgesPerShot}). Only affects grow-slot shots; other rotation slots are unchanged.
+	 */
+	private static final int GROW_PER_SHOT = Math.max(1, Integer.getInteger("coloring.growPerShot", 1));
+
 	public static void main(String[] args) {
 		if (args.length < 3 || args.length > 5) {
 			System.err.println("Usage: IncrementalColoringBenchmark <numVertices> <numEdges> <maxShots> [seed] [perShotTimeoutSec]");
@@ -236,9 +244,7 @@ public final class IncrementalColoringBenchmark {
 			Op op = decideOp(rot, model.orElse(null), rnd, numV, edgeKeys, forbidden);
 			// Commit the op's effect to the running graph/constraint state.
 			numV = op.newNumV;
-			if (op.edgeKeyAdded != null) {
-				edgeKeys.add(op.edgeKeyAdded);
-			}
+			edgeKeys.addAll(op.edgeKeysAdded);
 			if (op.edgeKeyRemoved != null) {
 				edgeKeys.remove(op.edgeKeyRemoved);
 			}
@@ -404,8 +410,8 @@ public final class IncrementalColoringBenchmark {
 				}
 				return grow(numV, rnd);
 			}
-			default: // case 0: grow
-				return grow(numV, rnd);
+			default: // case 0: grow (GROW_PER_SHOT pendants per shot)
+				return grow(numV, rnd, GROW_PER_SHOT);
 		}
 	}
 
@@ -420,14 +426,27 @@ public final class IncrementalColoringBenchmark {
 		}
 	}
 
-	/** Grow edit: new pendant vertex {@code numV+1} linked to a random existing vertex. */
+	/** Single-pendant grow (used by the mixed-rotation fallbacks). */
 	private static Op grow(int numV, Random rnd) {
-		int nv = numV + 1;
-		int nb = 1 + rnd.nextInt(numV);
+		return grow(numV, rnd, 1);
+	}
+
+	/**
+	 * Grow edit: add {@code g} new pendant vertices ({@code numV+1 .. numV+g}), each linked to a random
+	 * pre-existing vertex. Monotone (pendants are always colourable), so it never invalidates the current
+	 * colouring regardless of {@code g}. {@code g = 1} is the original single-pendant grow.
+	 */
+	private static Op grow(int numV, Random rnd, int g) {
 		List<String> facts = new ArrayList<>();
-		facts.add("v(" + nv + ").\n");
-		facts.add(edgeFact(nb, nv));
-		return new Op("grow", facts, null, nb + "," + nv, null, null, null, nv);
+		List<String> keys = new ArrayList<>();
+		for (int i = 1; i <= g; i++) {
+			int nv = numV + i;
+			int nb = 1 + rnd.nextInt(numV); // attach to a random pre-existing vertex
+			facts.add("v(" + nv + ").\n");
+			facts.add(edgeFact(nb, nv));
+			keys.add(nb + "," + nv);
+		}
+		return new Op("grow", facts, null, keys, null, null, null, numV + g);
 	}
 
 	/** Map each vertex (its term, as a string) to the colour predicate {@code c1..c5} it currently holds. */
@@ -519,18 +538,18 @@ public final class IncrementalColoringBenchmark {
 		final String label;
 		final List<String> factsAdded;    // facts to add this shot (may be empty)
 		final String factRemoved;         // edge fact to remove, or null
-		final String edgeKeyAdded;        // "lo,hi" added to the edge set, or null
+		final List<String> edgeKeysAdded; // "lo,hi" keys added to the edge set (may be empty; >1 for multi-grow)
 		final String edgeKeyRemoved;      // "lo,hi" removed from the edge set, or null
 		final String constraintAdded;     // constraint text to add, or null
 		final String forbiddenLit;        // "cK(v)" forbidden by the constraint, or null
 		final int newNumV;                // vertex count after this edit
 
-		Op(String label, List<String> factsAdded, String factRemoved, String edgeKeyAdded,
+		Op(String label, List<String> factsAdded, String factRemoved, List<String> edgeKeysAdded,
 				String edgeKeyRemoved, String constraintAdded, String forbiddenLit, int newNumV) {
 			this.label = label;
 			this.factsAdded = factsAdded;
 			this.factRemoved = factRemoved;
-			this.edgeKeyAdded = edgeKeyAdded;
+			this.edgeKeysAdded = edgeKeysAdded;
 			this.edgeKeyRemoved = edgeKeyRemoved;
 			this.constraintAdded = constraintAdded;
 			this.forbiddenLit = forbiddenLit;
@@ -540,17 +559,17 @@ public final class IncrementalColoringBenchmark {
 		static Op addEdge(int lo, int hi, int numV) {
 			List<String> facts = new ArrayList<>();
 			facts.add(edgeFact(lo, hi));
-			return new Op("add-edge", facts, null, lo + "," + hi, null, null, null, numV);
+			return new Op("add-edge", facts, null, List.of(lo + "," + hi), null, null, null, numV);
 		}
 
 		static Op retract(String key, int numV) {
 			String[] ab = key.split(",");
 			String fact = edgeFact(Integer.parseInt(ab[0]), Integer.parseInt(ab[1]));
-			return new Op("retract", new ArrayList<>(), fact, null, key, null, null, numV);
+			return new Op("retract", new ArrayList<>(), fact, List.of(), key, null, null, numV);
 		}
 
 		static Op constrain(String lit, int numV) {
-			return new Op("constrain", new ArrayList<>(), null, null, null, ":- " + lit + ".\n", lit, numV);
+			return new Op("constrain", new ArrayList<>(), null, List.of(), null, ":- " + lit + ".\n", lit, numV);
 		}
 	}
 
