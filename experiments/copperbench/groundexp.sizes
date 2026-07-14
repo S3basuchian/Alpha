@@ -1,5 +1,10 @@
 # ground explosion, model-dependent forbid-all — "<domSize> <shots>"
-# small instances: 10 shots only;  big instances (500, 1000): 10, 20, 40 shots.
+# small instances: 10 shots only;  big instances (500, 1000, 5000, 10000): 10, 20, 40 shots.
+#
+# Cost is dominated by the cold shot-1 base enumerate-2 (the |dom|-deep choice stack); shots 2+ are
+# ~free for alpha-mss. Measured live (alpha-mss) shot-1: dom-5000 ~130s, dom-10000 ~538s (~N^2 scaling),
+# so a 40-shot alpha-mss run is ~140s at 5000 and ~575s at 10000 — both under the 1800s timeout.
+# alpha-rebuilt re-pays the cold shot-1 every shot (Timeout at 5000/10000); clingo Memouts on |dom|^6.
 8 10
 10 10
 12 10
@@ -13,3 +18,9 @@
 1000 10
 1000 20
 1000 40
+5000 10
+5000 20
+5000 40
+10000 10
+10000 20
+10000 40

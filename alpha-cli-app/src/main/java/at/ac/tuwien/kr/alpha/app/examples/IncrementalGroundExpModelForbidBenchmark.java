@@ -92,8 +92,14 @@ public final class IncrementalGroundExpModelForbidBenchmark {
 		for (int shot = 1; shot <= numShots; shot++) {
 			long t0 = System.nanoTime();
 			List<AnswerSet> models = session.solve().limit(maxAS).collect(Collectors.toList());
-			total += (System.nanoTime() - t0) / 1e9;
+			double shotSecs = (System.nanoTime() - t0) / 1e9;
+			total += shotSecs;
 			List<String> toForbid = chooseForbid(models, rnd);
+			if (Boolean.getBoolean("ge.perShot")) {
+				System.err.printf("    [mss] shot %-3d  %8.3fs  (cum %8.3fs)  models=%d  forbid=%s%n",
+						shot, shotSecs, total, models.size(), toForbid);
+				System.err.flush();
+			}
 			if (toForbid.isEmpty()) {
 				break;
 			}
