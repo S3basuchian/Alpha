@@ -42,13 +42,15 @@ COL_HEADER = {"alpha-mss": "Alpha MSS", "alpha-rebuilt": "Alpha Rebuilt",
 SPEC = {
     # Ground explosion, model-dependent forbid-all, maxAS=2 (each shot: enumerate up to 2 answer sets,
     # block ALL selected elements found, re-solve). Own sequence per solver. Instance key "dom-shots";
-    # small dom at 10 shots, big dom (500/1000) at 10/20/40 shots.
+    # small dom at 10 shots, big dom (500/1000/5000/10000) at 10/20/40 shots.
     "groundexp": {
         "rows": [("8-10", "8", "10"), ("10-10", "10", "10"), ("12-10", "12", "10"),
                  ("14-10", "14", "10"), ("16-10", "16", "10"), ("18-10", "18", "10"),
                  ("20-10", "20", "10"),
                  ("500-10", "500", "10"), ("500-20", "500", "20"), ("500-40", "500", "40"),
-                 ("1000-10", "1000", "10"), ("1000-20", "1000", "20"), ("1000-40", "1000", "40")],
+                 ("1000-10", "1000", "10"), ("1000-20", "1000", "20"), ("1000-40", "1000", "40"),
+                 ("5000-10", "5000", "10"), ("5000-20", "5000", "20"), ("5000-40", "5000", "40"),
+                 ("10000-10", "10000", "10"), ("10000-20", "10000", "20"), ("10000-40", "10000", "40")],
         "row_head": r"$|\mathit{dom}|$", "extra_head": "Shots",
         "caption": r"Ground explosion, model-dependent forbid-all ($\mathit{maxAS}=2$).",
         "label": "tab:groundexp",
