@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One-shot driver: wipe old copperbench results, rebuild + regenerate everything, then generate and
-# submit the SLURM jobs for ALL five benchmarks. Run from the cluster head node after checking out
+# submit the SLURM jobs for ALL six benchmarks. Run from the cluster head node after checking out
 # the repo (copperbench must be installed and on PATH — see README):
 #
 #     bash experiments/copperbench/run-all.sh
@@ -23,7 +23,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 RUN_DIR="${RUN_DIR:-$REPO_ROOT}"
-BENCHES=(groundexp cutedge reach coloring coloring-grow)
+BENCHES=(groundexp cutedge reach coloring coloring-grow walk)
 
 command -v copperbench >/dev/null 2>&1 || {
     echo "ERROR: 'copperbench' not found on PATH — install it first (pip install . from a copperbench checkout; see README)." >&2

@@ -5,7 +5,7 @@ paper's four LaTeX tables.
 Usage (from wherever the copperbench <name>/ output folders live — normally the repo root):
     python3 experiments/copperbench/postprocess/collect.py [--results-dir .] [BENCH ...]
 
-with BENCH in {groundexp, cutedge, reach, coloring, coloring-grow} (default: all). For each
+with BENCH in {groundexp, cutedge, reach, coloring, coloring-grow, walk} (default: all). For each
 benchmark it reads every <name>/<config>/<instance>/run*/ directory, extracts the solver's
 self-reported overall runtime (the `RESULT_SECONDS=` line the wrappers print — the same
 "overall runtime" the paper reports, excluding JVM/gradle startup); a run that produced no
@@ -97,6 +97,23 @@ SPEC = {
         "caption": r"Graph $5$-coloring monotone-growth benchmark results "
                    r"(\texttt{grow}: each shot adds one pendant vertex and edge).",
         "label": "tab:coloring-grow",
+    },
+    # Gardener's Walk: receding-horizon conformant planning (W=30, 10% walls, bump semantics,
+    # skittish coupled frogs; every shot: plan h steps, execute one, observe frog hops, re-solve).
+    # Instance key "H-F-SHOTS" (see run-walk.sh's announce); early-UNSAT runs emit no
+    # RESULT_SECONDS and count as unfinished samples.
+    "walk": {
+        "rows": [("8-2-10", "8/2", "10"), ("8-2-20", "8/2", "20"),
+                 ("8-4-10", "8/4", "10"), ("8-4-20", "8/4", "20"),
+                 ("12-2-10", "12/2", "10"), ("12-2-20", "12/2", "20"),
+                 ("12-4-10", "12/4", "10"), ("12-4-20", "12/4", "20"),
+                 ("16-2-10", "16/2", "10"), ("16-2-20", "16/2", "20"),
+                 ("16-4-10", "16/4", "10"), ("16-4-20", "16/4", "20"),
+                 ("20-2-10", "20/2", "10"), ("20-2-20", "20/2", "20")],
+        "row_head": r"$h$/frogs", "extra_head": "Shots",
+        "caption": r"Gardener's Walk: receding-horizon conformant planning "
+                   r"(30$\times$30 garden, 10\% walls, skittish frogs; horizon $h$).",
+        "label": "tab:walk",
     },
 }
 

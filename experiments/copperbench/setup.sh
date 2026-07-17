@@ -112,13 +112,28 @@ while read -r V E SHOTS; do
     for s in "${SEEDS[@]}"; do echo "$V $E $SHOTS $s" >> "$HERE/coloring-grow.instances"; done
 done < <(read_sizes coloring-grow)
 
-for b in groundexp cutedge reach coloring coloring-grow; do
+
+# walk: Gardener's Walk receding-horizon planning. One seeded instance spec per (F,seed)
+# (W=30, 10% walls, connected free space, frog min-distance 10) shared across the h/shots
+# rows and by all four configs. The Java driver / clingo drivers replay their own seeded
+# frog movement (own-sequence). Size grid line: "<H> <F> <SHOTS>"; instance line adds seed.
+mkdir -p "$EXAMPLES/walk/instances"
+: > "$HERE/walk.instances"
+while read -r H F SHOTS; do
+    for s in "${SEEDS[@]}"; do
+        f="$EXAMPLES/walk/instances/inst-W30-f$F-s$s.spec"
+        [[ -f "$f" ]] || "$PY" "$EXAMPLES/walk/gen_walk_instance.py" 30 "$F" "$s" 10 10 > "$f"
+        echo "$H $F $SHOTS $s" >> "$HERE/walk.instances"
+    done
+done < <(read_sizes walk)
+
+for b in groundexp cutedge reach coloring coloring-grow walk; do
     echo "    $b.instances: $(wc -l < "$HERE/$b.instances") lines"
 done
 
 # 3. Render the copperbench JSON configs from templates.
 echo "==> rendering copperbench configs (partition=$PARTITION) ..."
-for b in groundexp cutedge reach coloring coloring-grow; do
+for b in groundexp cutedge reach coloring coloring-grow walk; do
     sed -e "s#__REPO_ROOT__#$REPO_ROOT#g" \
         -e "s#__PARTITION__#$PARTITION#g" \
         "$HERE/$b.json.in" > "$HERE/$b.json"
