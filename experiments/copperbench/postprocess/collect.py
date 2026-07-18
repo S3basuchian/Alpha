@@ -105,16 +105,14 @@ SPEC = {
     # "W-H-F-SHOTS" (see run-walk.sh's announce); early-UNSAT runs emit no RESULT_SECONDS and
     # count as unfinished samples.
     "walk": {
-        "rows": [("80-16-2-20", "80/2", "20"), ("80-16-2-40", "80/2", "40"),
-                 ("80-16-4-20", "80/4", "20"), ("80-16-4-40", "80/4", "40"),
-                 ("120-16-2-20", "120/2", "20"), ("120-16-2-40", "120/2", "40"),
-                 ("120-16-6-20", "120/6", "20"), ("120-16-6-40", "120/6", "40"),
-                 ("160-16-3-20", "160/3", "20"), ("160-16-3-40", "160/3", "40"),
-                 ("160-16-8-20", "160/8", "20"), ("160-16-8-40", "160/8", "40")],
-        "row_head": r"$W$/frogs", "extra_head": "Shots",
+        "rows": [("100-6-2-20", "100/2", "6"), ("100-12-2-20", "100/2", "12"),
+                 ("100-6-5-20", "100/5", "6"), ("100-12-5-20", "100/5", "12"),
+                 ("200-6-4-20", "200/4", "6"), ("200-12-4-20", "200/4", "12"),
+                 ("200-6-10-20", "200/10", "6"), ("200-12-10-20", "200/10", "12")],
+        "row_head": r"$W$/frogs", "extra_head": "$h$",
         "caption": r"Gardener's Walk: receding-horizon conformant planning ($W{\times}W$ garden, "
-                   r"10\% walls, horizon $16$; skittish frogs at ${\sim}2\%$ and ${\sim}5\%$ of $W$, "
-                   r"starting at distance $2W/5$).",
+                   r"10\% walls, 20 shots; skittish frogs at ${\sim}2\%$ and ${\sim}5\%$ of $W$ "
+                   r"starting at distance $2W/5$; lookahead horizon $h$).",
         "label": "tab:walk",
     },
 }
