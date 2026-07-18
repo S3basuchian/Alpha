@@ -98,21 +98,19 @@ SPEC = {
                    r"(\texttt{grow}: each shot adds one pendant vertex and edge).",
         "label": "tab:coloring-grow",
     },
-    # Gardener's Walk: receding-horizon conformant planning (W=30, 10% walls, bump semantics,
-    # skittish coupled frogs; every shot: plan h steps, execute one, observe frog hops, re-solve).
-    # Instance key "H-F-SHOTS" (see run-walk.sh's announce); early-UNSAT runs emit no
-    # RESULT_SECONDS and count as unfinished samples.
+    # Gardener's Walk: receding-horizon conformant planning (h=16, 2 skittish coupled frogs,
+    # 10% walls with an open-disk gardener start, frog distance = W/3; every shot: plan h steps,
+    # execute one, observe frog hops, re-solve). The W axis shows the static-base scaling trend:
+    # rebuilds re-pay the W^2 world model every shot, the session grounds it once. Instance key
+    # "W-H-F-SHOTS" (see run-walk.sh's announce); early-UNSAT runs emit no RESULT_SECONDS and
+    # count as unfinished samples.
     "walk": {
-        "rows": [("8-2-10", "8/2", "10"), ("8-2-20", "8/2", "20"),
-                 ("8-4-10", "8/4", "10"), ("8-4-20", "8/4", "20"),
-                 ("12-2-10", "12/2", "10"), ("12-2-20", "12/2", "20"),
-                 ("12-4-10", "12/4", "10"), ("12-4-20", "12/4", "20"),
-                 ("16-2-10", "16/2", "10"), ("16-2-20", "16/2", "20"),
-                 ("16-4-10", "16/4", "10"), ("16-4-20", "16/4", "20"),
-                 ("20-2-10", "20/2", "10"), ("20-2-20", "20/2", "20")],
-        "row_head": r"$h$/frogs", "extra_head": "Shots",
+        "rows": [("60-16-2-20", "60", "20"), ("60-16-2-40", "60", "40"),
+                 ("100-16-2-20", "100", "20"), ("100-16-2-40", "100", "40"),
+                 ("140-16-2-20", "140", "20"), ("140-16-2-40", "140", "40")],
+        "row_head": r"$W$", "extra_head": "Shots",
         "caption": r"Gardener's Walk: receding-horizon conformant planning "
-                   r"(30$\times$30 garden, 10\% walls, skittish frogs; horizon $h$).",
+                   r"($W{\times}W$ garden, 10\% walls, horizon $16$, two skittish frogs).",
         "label": "tab:walk",
     },
 }

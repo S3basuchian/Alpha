@@ -10,8 +10,9 @@ the gardener start reaches every free cell), so every position stays accessible 
 gardener and frogs. Frogs are placed on random free cells at Manhattan distance
 >= dmin from the gardener start.
 
-Usage: gen_walk_instance.py W numFrogs seed wallPct dmin
+Usage: gen_walk_instance.py W numFrogs seed wallPct dmin [openR=3]
 """
+import os
 import random
 import sys
 from collections import deque
@@ -36,8 +37,15 @@ def main():
     gard = (w // 2, w // 2)
     cells = [(c, r) for c in range(1, w + 1) for r in range(1, w + 1)]
     nwalls = int(len(cells) * wallpct / 100.0)
+    # keep a wall-free open disk of radius `openr` around the gardener start so it can never be
+    # boxed into a pocket (the source of lost-game UNSAT states). openr=0 disables (legacy behaviour).
+    openr = int(sys.argv[6]) if len(sys.argv) > 6 else 3
+    protected = {(c, r) for c in range(gard[0] - openr, gard[0] + openr + 1)
+                 for r in range(gard[1] - openr, gard[1] + openr + 1)
+                 if 1 <= c <= w and 1 <= r <= w and abs(c - gard[0]) + abs(r - gard[1]) <= openr}
+    placeable = [x for x in cells if x not in protected]
     for _attempt in range(200):
-        walls = set(rng.sample([x for x in cells if x != gard], nwalls))
+        walls = set(rng.sample(placeable, min(nwalls, len(placeable))))
         free = set(cells) - walls
         if connected(free, w, gard):
             break

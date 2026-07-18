@@ -119,11 +119,11 @@ done < <(read_sizes coloring-grow)
 # frog movement (own-sequence). Size grid line: "<H> <F> <SHOTS>"; instance line adds seed.
 mkdir -p "$EXAMPLES/walk/instances"
 : > "$HERE/walk.instances"
-while read -r H F SHOTS; do
+while read -r W H F SHOTS; do
     for s in "${SEEDS[@]}"; do
-        f="$EXAMPLES/walk/instances/inst-W30-f$F-s$s.spec"
-        [[ -f "$f" ]] || "$PY" "$EXAMPLES/walk/gen_walk_instance.py" 30 "$F" "$s" 10 10 > "$f"
-        echo "$H $F $SHOTS $s" >> "$HERE/walk.instances"
+        f="$EXAMPLES/walk/instances/inst-W$W-f$F-s$s.spec"
+        [[ -f "$f" ]] || "$PY" "$EXAMPLES/walk/gen_walk_instance.py" "$W" "$F" "$s" 10 "$((W / 3))" 3 > "$f"
+        echo "$W $H $F $SHOTS $s" >> "$HERE/walk.instances"
     done
 done < <(read_sizes walk)
 

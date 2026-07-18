@@ -24,6 +24,7 @@ import os
 import clingo
 
 UNCOUPLED = os.environ.get("WALK_UNCOUPLED", "") == "1"
+DEEPEN_EVERY = int(os.environ.get("WALK_DEEPEN_EVERY", "0"))  # every N shots the horizon grows by 1
 
 
 def window_rules(w, h, nf, anchors_external):
@@ -117,7 +118,22 @@ def main():
                          for c in range(1, w + 1) for r in range(1, w + 1))
     wall_facts += "".join(f"wall({c},0). wall({c},{w+1}). " for c in range(0, w + 2))
     wall_facts += "".join(f"wall(0,{r}). wall({w+1},{r}). " for r in range(1, w + 1))
-    print(f"walk-clingo mode={mode} W={w} h={h} frogs={nf} shots={shots} seed={seed} uncoupled={UNCOUPLED}")
+    # replay: a trajectory file (8th arg) fixes the executed move + frog positions per shot, so
+    # every config solves the IDENTICAL state sequence. mode "record" (clingo-batch) writes one.
+    trajpath = sys.argv[8] if len(sys.argv) > 8 else None
+    traj = None
+    rec = None
+    if mode == "record":
+        rec = open(trajpath, "w")
+        mode = "batch"
+    elif trajpath:
+        traj = []
+        for line in open(trajpath):
+            p = [int(x) for x in line.split()]
+            traj.append((p[0], [(p[1 + 2 * i], p[2 + 2 * i]) for i in range(nf)]))
+        shots = min(shots, len(traj))
+    print(f"walk-clingo mode={mode} W={w} h={h} frogs={nf} shots={shots} seed={seed} "
+          f"uncoupled={UNCOUPLED} replay={bool(traj)} record={bool(rec)}")
 
     ctl = None
     ground_time = 0.0
@@ -132,7 +148,10 @@ def main():
 
     total = 0.0
     times = []
+    h0 = h
     for shot in range(shots):
+        if DEEPEN_EVERY > 0:
+            h = h0 + (shot // DEEPEN_EVERY)  # deepen the lookahead as the walk progresses
         t0 = time.time()
         if mode == "batch":
             ctl = clingo.Control(["1"])
@@ -163,20 +182,28 @@ def main():
             print(f"shot {shot}: UNSAT — stopping (survived {shot} shots)")
             print(f"RESULT mode={mode} survived={shot}/{shots} totalSolve={total:.3f}")
             sys.exit(1)
-        d = plan[1]
+        # executed move: from the trajectory in replay, else from this config's own plan
+        d = traj[shot][0] if traj else plan[1]
         dc, dr = {1: (0, 1), 2: (0, -1), 3: (1, 0), 4: (-1, 0)}[d]
         tgt = (gard[0] + dc, gard[1] + dr)
         if 1 <= tgt[0] <= w and 1 <= tgt[1] <= w and tgt not in walls:
             gard = tgt  # else: bump — gardener stays put
-        newfrogs = []
-        for i, f in enumerate(frogs):
-            nxt = rng.choice(legal_hops(f, gard, w, walls))
-            if nxt == gard:
-                print(f"shot {shot}: CAPTURE — conformance broken")
-                sys.exit(1)
-            newfrogs.append(nxt)
+        if traj:
+            newfrogs = traj[shot][1]
+        else:
+            newfrogs = []
+            for i, f in enumerate(frogs):
+                nxt = rng.choice(legal_hops(f, gard, w, walls))
+                if nxt == gard:
+                    print(f"shot {shot}: CAPTURE — conformance broken")
+                    sys.exit(1)
+                newfrogs.append(nxt)
+        if rec:
+            rec.write(f"{d} " + " ".join(f"{c} {r}" for (c, r) in newfrogs) + "\n")
         frogs = newfrogs
         print(f"shot {shot:3d}: solve={sec:.3f}s gard={gard}")
+    if rec:
+        rec.close()
     first5 = sum(times[:5]) / min(5, len(times))
     last5 = sum(times[-5:]) / min(5, len(times))
     print(f"\nOK: {shots} shots, 0 captures.")

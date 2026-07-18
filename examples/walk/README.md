@@ -1,8 +1,8 @@
 # Gardener's Walk — receding-horizon conformant planning (Alpha vs. clingo)
 
-The gardener walks a 30x30 garden (4 actions: N/S/E/W). ~10% of the cells are hedges
+The gardener walks a WxW garden (W = 60/100/140 in the benchmark grid) (4 actions: N/S/E/W). ~10% of the cells are hedges
 (walls): the gardener cannot pass them — walking into one is a harmless *bump* (he stays
-put) — while frogs simply hop over them. The free space is guaranteed connected. Frogs are
+put) — while frogs simply hop over them. The free space is guaranteed connected. Frogs start at distance W/3 and are
 *skittish*: each time step a frog hops one cell strictly toward the gardener's current
 position (or stays if the gardener stands on it). The norm is the original Gardener MTN1,
 conformant: **the gardener must never be on a cell that any frog could possibly occupy**,
