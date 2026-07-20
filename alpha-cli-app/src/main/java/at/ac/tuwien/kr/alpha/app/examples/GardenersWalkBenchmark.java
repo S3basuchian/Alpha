@@ -501,6 +501,11 @@ public final class GardenersWalkBenchmark {
 		// justification search must stay ENABLED in session mode (2026-07-17: disabling it
 		// degrades live shots ~2500x); -Dwalk.dj=true disables it for batch experiments only.
 		cfg.setDisableJustificationSearch(Boolean.getBoolean("walk.dj"));
+		// diagnostic: -Dwalk.heuristic=DD|GDD_VSIDS|... overrides the branching heuristic (default VSIDS).
+		String heuristic = System.getProperty("walk.heuristic");
+		if (heuristic != null) {
+			cfg.setBranchingHeuristicName(heuristic);
+		}
 		return new AlphaImpl(cfg);
 	}
 

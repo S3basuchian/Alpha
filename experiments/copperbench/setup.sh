@@ -113,16 +113,20 @@ while read -r V E SHOTS; do
 done < <(read_sizes coloring-grow)
 
 
-# walk: Gardener's Walk receding-horizon planning. One seeded instance spec per (F,seed)
-# (W=30, 10% walls, connected free space, frog min-distance 10) shared across the h/shots
-# rows and by all four configs. The Java driver / clingo drivers replay their own seeded
-# frog movement (own-sequence). Size grid line: "<H> <F> <SHOTS>"; instance line adds seed.
+# walk: Gardener's Walk receding-horizon planning. One seeded instance spec per (W,F,seed)
+# (10% walls, connected free space via pocket-filling, frogs uniform at Manhattan distance >= 5)
+# shared across the h/shots rows and by all four configs. The Java driver / clingo drivers replay
+# their own seeded frog movement (own-sequence). The placement floor is part of the filename (-d5)
+# so a placement change can never silently reuse stale specs. Size grid line: "<W> <H> <F> <SHOTS>".
 mkdir -p "$EXAMPLES/walk/instances"
 : > "$HERE/walk.instances"
 while read -r W H F SHOTS; do
     for s in "${SEEDS[@]}"; do
-        f="$EXAMPLES/walk/instances/inst-W$W-f$F-s$s.spec"
-        [[ -f "$f" ]] || "$PY" "$EXAMPLES/walk/gen_walk_instance.py" "$W" "$F" "$s" 10 "$((2 * W / 5))" 3 > "$f"
+        f="$EXAMPLES/walk/instances/inst-W$W-f$F-d5-s$s.spec"
+        # -s (not -f): a failed generation must not leave an empty file behind that later
+        # passes the wrapper's existence check (every config then dies on it -> excluded cell).
+        [[ -s "$f" ]] || "$PY" "$EXAMPLES/walk/gen_walk_instance.py" "$W" "$F" "$s" 10 5 3 > "$f" \
+            || { rm -f "$f"; echo "FATAL: instance generation failed for $f" >&2; exit 1; }
         echo "$W $H $F $SHOTS $s" >> "$HERE/walk.instances"
     done
 done < <(read_sizes walk)

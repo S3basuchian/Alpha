@@ -61,7 +61,12 @@ public final class IncrementalGroundExpModelForbidBenchmark {
 		String encoding = Files.readString(encodingPath);
 		String dom = Files.readString(domPath);
 
-		Alpha alpha = new AlphaImpl();
+		at.ac.tuwien.kr.alpha.api.config.SystemConfig cfg = new at.ac.tuwien.kr.alpha.api.config.SystemConfig();
+		String heuristic = System.getProperty("bench.heuristic");
+		if (heuristic != null) {
+			cfg.setBranchingHeuristicName(heuristic);
+		}
+		Alpha alpha = new AlphaImpl(cfg);
 		alpha.solve(alpha.readProgramString("p(1). q(X) :- p(X).")).count(); // warm JIT
 
 		System.out.printf("%nmodel-dependent forbid (%s, own sequence per mode)  maxAS=%d  shots=%d  seed=%d%n",

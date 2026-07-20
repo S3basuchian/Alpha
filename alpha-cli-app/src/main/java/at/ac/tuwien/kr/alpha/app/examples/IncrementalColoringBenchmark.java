@@ -578,6 +578,10 @@ public final class IncrementalColoringBenchmark {
 		if (Boolean.getBoolean("coloring.disableJustifications")) {
 			cfg.setDisableJustificationSearch(true);
 		}
+		String heuristic = System.getProperty("bench.heuristic");
+		if (heuristic != null) {
+			cfg.setBranchingHeuristicName(heuristic);
+		}
 		return new AlphaImpl(cfg);
 	}
 

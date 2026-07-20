@@ -210,7 +210,12 @@ public final class IncrementalCutedgeRetractionBenchmark {
 	}
 
 	private static Alpha newAlpha() {
-		return new AlphaImpl();
+		at.ac.tuwien.kr.alpha.api.config.SystemConfig cfg = new at.ac.tuwien.kr.alpha.api.config.SystemConfig();
+		String heuristic = System.getProperty("bench.heuristic");
+		if (heuristic != null) {
+			cfg.setBranchingHeuristicName(heuristic);
+		}
+		return new AlphaImpl(cfg);
 	}
 
 	private IncrementalCutedgeRetractionBenchmark() {}

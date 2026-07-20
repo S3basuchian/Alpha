@@ -98,21 +98,24 @@ SPEC = {
                    r"(\texttt{grow}: each shot adds one pendant vertex and edge).",
         "label": "tab:coloring-grow",
     },
-    # Gardener's Walk: receding-horizon conformant planning (h=16, skittish coupled frogs at 2%/5% of W,
-    # 10% walls with an open-disk gardener start, frog distance = W/3; every shot: plan h steps,
-    # execute one, observe frog hops, re-solve). The W axis shows the static-base scaling trend:
-    # rebuilds re-pay the W^2 world model every shot, the session grounds it once. Instance key
-    # "W-H-F-SHOTS" (see run-walk.sh's announce); early-UNSAT runs emit no RESULT_SECONDS and
+    # Gardener's Walk: receding-horizon conformant planning (skittish coupled frogs at 2%/5% of W,
+    # 10% walls with an open-disk gardener start, frogs uniform at distance >= 5; every shot: plan
+    # h steps, execute one, observe frog hops, re-solve; both Alpha columns use the NAIVE
+    # chronological branching heuristic, see run-walk.sh). The W axis shows the static-base scaling
+    # trend: rebuilds re-pay the W^2 world model every shot, the session grounds it once. Instance
+    # key "W-H-F-SHOTS" (see run-walk.sh's announce); early-UNSAT runs emit no RESULT_SECONDS and
     # count as unfinished samples.
     "walk": {
         "rows": [("100-6-2-20", "100/2", "6"), ("100-12-2-20", "100/2", "12"),
                  ("100-6-5-20", "100/5", "6"), ("100-12-5-20", "100/5", "12"),
                  ("200-6-4-20", "200/4", "6"), ("200-12-4-20", "200/4", "12"),
-                 ("200-6-10-20", "200/10", "6"), ("200-12-10-20", "200/10", "12")],
+                 ("200-6-10-20", "200/10", "6"), ("200-12-10-20", "200/10", "12"),
+                 ("500-6-10-20", "500/10", "6"), ("500-12-10-20", "500/10", "12"),
+                 ("500-6-25-20", "500/25", "6"), ("500-12-25-20", "500/25", "12")],
         "row_head": r"$W$/frogs", "extra_head": "$h$",
         "caption": r"Gardener's Walk: receding-horizon conformant planning ($W{\times}W$ garden, "
                    r"10\% walls, 20 shots; skittish frogs at ${\sim}2\%$ and ${\sim}5\%$ of $W$ "
-                   r"starting at distance $2W/5$; lookahead horizon $h$).",
+                   r"placed uniformly at distance ${\geq}5$; lookahead horizon $h$).",
         "label": "tab:walk",
     },
 }
