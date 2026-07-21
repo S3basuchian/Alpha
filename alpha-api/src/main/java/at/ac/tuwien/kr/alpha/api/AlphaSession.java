@@ -43,8 +43,7 @@ import at.ac.tuwien.kr.alpha.api.programs.atoms.Atom;
  *
  * <p>The rule-add restriction closes a learned-nogood soundness gap: adding a rule whose head predicate
  * already has rules from a previous shot would weaken that predicate's existing support and silently
- * invalidate learned nogoods derived against it. Lifting the restriction requires per-learned-nogood
- * provenance tracking; planned as future work.
+ * invalidate learned nogoods derived against it.
  *
  * <p>Implementation note on incremental fast paths:
  * <ul>
