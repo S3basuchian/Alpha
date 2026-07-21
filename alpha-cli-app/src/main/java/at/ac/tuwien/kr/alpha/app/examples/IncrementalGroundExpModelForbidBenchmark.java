@@ -72,7 +72,8 @@ public final class IncrementalGroundExpModelForbidBenchmark {
 		System.out.printf("%nmodel-dependent forbid (%s, own sequence per mode)  maxAS=%d  shots=%d  seed=%d%n",
 				forbidAll ? "block ALL found" : "block ONE random found", maxAS, numShots, seed);
 
-		double mssTotal = -1, rebuiltTotal = -1;
+		double mssTotal = -1;
+		double rebuiltTotal = -1;
 		if (mode.equals("mss") || mode.equals("both")) {
 			mssTotal = runMss(alpha, encoding, dom, numShots, seed);
 			System.out.printf("  total mss:     %.3fs over %d shots%n", mssTotal, numShots);

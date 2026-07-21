@@ -1283,7 +1283,13 @@ public class AlphaSessionImplTest {
 	 */
 	private static final class AutoCloseableSession implements AutoCloseable {
 		final AlphaSession session;
-		AutoCloseableSession(AlphaSession session) { this.session = session; }
-		@Override public void close() { session.reset(); }
+		AutoCloseableSession(AlphaSession session) {
+			this.session = session;
+		}
+
+		@Override
+		public void close() {
+			session.reset();
+		}
 	}
 }

@@ -15,7 +15,6 @@ import java.util.List;
 
 import at.ac.tuwien.kr.alpha.core.common.NoGood;
 import at.ac.tuwien.kr.alpha.core.common.NoGoodInterface;
-import at.ac.tuwien.kr.alpha.core.grounder.Grounder;
 import at.ac.tuwien.kr.alpha.core.grounder.NaiveGrounder;
 import at.ac.tuwien.kr.alpha.core.grounder.ProgramAnalyzingGrounder;
 import at.ac.tuwien.kr.alpha.api.programs.atoms.Atom;
@@ -81,7 +80,7 @@ final class SessionGrounder implements ProgramAnalyzingGrounder {
 	private final Set<Integer> registeredEnumerationIds = new LinkedHashSet<>();
 	private final Set<Integer> registeredLearnedIds = new LinkedHashSet<>();
 
-	private boolean replayOnNextBatch = false;
+	private boolean replayOnNextBatch;
 
 	SessionGrounder(NaiveGrounder delegate) {
 		this.delegate = delegate;

@@ -34,7 +34,6 @@ import static at.ac.tuwien.kr.alpha.core.programs.atoms.Literals.negateLiteral;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -127,7 +126,7 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 	 * TRANSIENT-tagged support nogoods sound: a head that gained a fact or a second defining rule no longer
 	 * receives one. The program is fixed within a shot, so one recompute per change is enough.
 	 */
-	private boolean uniqueHeadSetDirty = false;
+	private boolean uniqueHeadSetDirty;
 
 	/**
 	 * In session mode, maps each currently-active fact atom's id to the id of its unit nogood. Used by

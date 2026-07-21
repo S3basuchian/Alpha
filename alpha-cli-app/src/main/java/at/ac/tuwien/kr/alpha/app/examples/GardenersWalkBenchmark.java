@@ -49,7 +49,7 @@ import at.ac.tuwien.kr.alpha.api.programs.atoms.Atom;
  */
 public final class GardenersWalkBenchmark {
 
-	private static final int[][] DIRS = { { 0, 1 }, { 0, -1 }, { 1, 0 }, { -1, 0 } }; // 1=N 2=S 3=E 4=W
+	private static final int[][] DIRS = {{0, 1}, {0, -1}, {1, 0}, {-1, 0}}; // 1=N 2=S 3=E 4=W
 	private static final int SHOT_CAP_SEC = Integer.getInteger("walk.shotCapSec", 300);
 	// coupled mode (default): skittish frogs hop toward the gardener — the danger closure joins playerAt
 	private static final boolean COUPLED = !"false".equals(System.getProperty("walk.coupled"));
@@ -140,10 +140,10 @@ public final class GardenersWalkBenchmark {
 					String[] p = line.trim().split("\\s+");
 					switch (p[0]) {
 						case "gard":
-							inst.gard = new int[] { Integer.parseInt(p[1]), Integer.parseInt(p[2]) };
+							inst.gard = new int[] {Integer.parseInt(p[1]), Integer.parseInt(p[2])};
 							break;
 						case "frog":
-							inst.frogs.add(new int[] { Integer.parseInt(p[2]), Integer.parseInt(p[3]) });
+							inst.frogs.add(new int[] {Integer.parseInt(p[2]), Integer.parseInt(p[3])});
 							break;
 						case "wall":
 							inst.walls.add(key(Integer.parseInt(p[1]), Integer.parseInt(p[2])));
@@ -161,10 +161,10 @@ public final class GardenersWalkBenchmark {
 
 		static Instance legacy(int w, int numFrogs) {
 			Instance inst = new Instance();
-			inst.gard = new int[] { w / 2, w / 2 };
-			int[][] starts = { { w - 4, w / 2 }, { 4, w - 5 }, { w / 2, 4 }, { 5, 5 } };
+			inst.gard = new int[] {w / 2, w / 2};
+			int[][] starts = {{w - 4, w / 2}, {4, w - 5}, {w / 2, 4}, {5, 5}};
 			for (int i = 0; i < numFrogs; i++) {
-				inst.frogs.add(new int[] { starts[i][0], starts[i][1] });
+				inst.frogs.add(new int[] {starts[i][0], starts[i][1]});
 			}
 			return inst;
 		}
@@ -244,7 +244,7 @@ public final class GardenersWalkBenchmark {
 			verifyPlan(plan, gard, frogs, inst.walls, t, h, w);
 			// executed move: from the trajectory in replay, else from this config's own plan
 			int d = traj != null ? traj.get(shot)[0] : plan.get(t + 1);
-			int[] tgt = { gard[0] + DIRS[d - 1][0], gard[1] + DIRS[d - 1][1] };
+			int[] tgt = {gard[0] + DIRS[d - 1][0], gard[1] + DIRS[d - 1][1]};
 			if (tgt[0] >= 1 && tgt[0] <= w && tgt[1] >= 1 && tgt[1] <= w && !inst.walls.contains(key(tgt[0], tgt[1]))) {
 				gard = tgt; // move
 			} // else: bump into hedge/border — gardener stays put
@@ -260,7 +260,7 @@ public final class GardenersWalkBenchmark {
 			for (int i = 0; i < numFrogs; i++) {
 				int[] nxt;
 				if (traj != null) {
-					nxt = new int[] { traj.get(shot)[1 + 2 * i], traj.get(shot)[2 + 2 * i] };
+					nxt = new int[] {traj.get(shot)[1 + 2 * i], traj.get(shot)[2 + 2 * i]};
 				} else {
 					List<int[]> legal = legalHops(frogs.get(i), gard, inst.walls, w);
 					nxt = legal.get(rng.nextInt(legal.size()));
@@ -325,7 +325,7 @@ public final class GardenersWalkBenchmark {
 			if (d == null) {
 				throw new IllegalStateException("plan missing move for time " + tau);
 			}
-			int[] tgt = { pos[0] + DIRS[d - 1][0], pos[1] + DIRS[d - 1][1] };
+			int[] tgt = {pos[0] + DIRS[d - 1][0], pos[1] + DIRS[d - 1][1]};
 			if (tgt[0] >= 1 && tgt[0] <= w && tgt[1] >= 1 && tgt[1] <= w && !walls.contains(key(tgt[0], tgt[1]))) {
 				pos = tgt;
 			} // else bump: pos unchanged
@@ -391,19 +391,19 @@ public final class GardenersWalkBenchmark {
 		List<int[]> legal = new ArrayList<>();
 		if (COUPLED) {
 			if (f[1] < gard[1]) {
-				legal.add(new int[] { f[0], f[1] + 1 });
+				legal.add(new int[] {f[0], f[1] + 1});
 			}
 			if (f[1] > gard[1]) {
-				legal.add(new int[] { f[0], f[1] - 1 });
+				legal.add(new int[] {f[0], f[1] - 1});
 			}
 			if (f[0] < gard[0]) {
-				legal.add(new int[] { f[0] + 1, f[1] });
+				legal.add(new int[] {f[0] + 1, f[1]});
 			}
 			if (f[0] > gard[0]) {
-				legal.add(new int[] { f[0] - 1, f[1] });
+				legal.add(new int[] {f[0] - 1, f[1]});
 			}
 			if (legal.isEmpty()) {
-				legal.add(new int[] { f[0], f[1] });
+				legal.add(new int[] {f[0], f[1]});
 			}
 			return legal;
 		}
@@ -411,11 +411,11 @@ public final class GardenersWalkBenchmark {
 			int nc = f[0] + dd[0];
 			int nr = f[1] + dd[1];
 			if (nc >= 1 && nc <= w && nr >= 1 && nr <= w) {
-				legal.add(new int[] { nc, nr });
+				legal.add(new int[] {nc, nr});
 			}
 		}
 		if (legal.isEmpty()) {
-			legal.add(new int[] { f[0], f[1] });
+			legal.add(new int[] {f[0], f[1]});
 		}
 		return legal;
 	}

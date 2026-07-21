@@ -98,7 +98,9 @@ public final class IncrementalReachBenchmark {
 			// In rebuild mode, drain the iterator so all answer sets are enumerated. The
 			// next solve purges the enumeration nogoods in-place rather than rebuilding.
 			if ("rebuild".equals(mode)) {
-				while (it.hasNext()) { it.next(); }
+				while (it.hasNext()) {
+					it.next();
+				}
 			}
 			long t1 = System.nanoTime();
 			double prep = (beforeFirst - t0) / 1e9;
@@ -167,5 +169,6 @@ public final class IncrementalReachBenchmark {
 		return new AlphaImpl(cfg);
 	}
 
-	private IncrementalReachBenchmark() {}
+	private IncrementalReachBenchmark() {
+	}
 }

@@ -218,5 +218,6 @@ public final class IncrementalCutedgeRetractionBenchmark {
 		return new AlphaImpl(cfg);
 	}
 
-	private IncrementalCutedgeRetractionBenchmark() {}
+	private IncrementalCutedgeRetractionBenchmark() {
+	}
 }

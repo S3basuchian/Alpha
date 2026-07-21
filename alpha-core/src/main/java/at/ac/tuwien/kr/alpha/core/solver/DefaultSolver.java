@@ -109,7 +109,7 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 	 * store. The between-shot reset ({@link #resetInPlace}) purges all transient nogoods unconditionally and
 	 * clears this flag; it is kept for its diagnostic value.
 	 */
-	private boolean enumerationUsed = false;
+	private boolean enumerationUsed;
 
 	/**
 	 * Set to {@code true} when this shot's search terminated in a conflict at decision level 0 — an UNSAT
@@ -120,7 +120,7 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 	 * after choices, over a consistent dl-0 fixpoint), which the warm resets handle correctly. Reset at each
 	 * shot start; read by the session via {@link #hasEndedInDecisionLevelZeroConflict()}.
 	 */
-	private boolean endedInDecisionLevelZeroConflict = false;
+	private boolean endedInDecisionLevelZeroConflict;
 
 	/**
 	 * @return whether the last shot ended in a decision-level-0 conflict (see

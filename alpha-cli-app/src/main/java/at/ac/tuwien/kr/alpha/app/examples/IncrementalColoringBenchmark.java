@@ -142,8 +142,10 @@ public final class IncrementalColoringBenchmark {
 
 		exec.shutdownNow();
 
-		double liveTotal = 0, batchTotal = 0;
-		int liveTimeouts = 0, batchTimeouts = 0;
+		double liveTotal = 0;
+		double batchTotal = 0;
+		int liveTimeouts = 0;
+		int batchTimeouts = 0;
 		System.out.printf("%n%-6s | %-10s | %-6s | %-6s | %-7s | %-12s | %-12s%n",
 				"shot", "op", "|V|", "|E|", "constr", "live (s)", "batch (s)");
 		System.out.printf("%-6s-+-%-10s-+-%-6s-+-%-6s-+-%-7s-+-%-12s-+-%-12s%n",
@@ -369,30 +371,29 @@ public final class IncrementalColoringBenchmark {
 	 */
 	private static Op decideOp(int rot, AnswerSet model, Random rnd, int numV, Set<String> edgeKeys, Set<String> forbidden) {
 		switch (rot) {
-			case 1: { // add-edge between two existing vertices
+			case 1: // add-edge between two existing vertices
 				for (int tries = 0; tries < 50; tries++) {
 					int a = 1 + rnd.nextInt(numV);
 					int b = 1 + rnd.nextInt(numV);
 					if (a == b) {
 						continue;
 					}
-					int lo = Math.min(a, b), hi = Math.max(a, b);
+					int lo = Math.min(a, b);
+					int hi = Math.max(a, b);
 					String key = lo + "," + hi;
 					if (!edgeKeys.contains(key)) {
 						return Op.addEdge(lo, hi, numV);
 					}
 				}
 				return grow(numV, rnd);
-			}
-			case 2: { // retract an existing edge
+			case 2: // retract an existing edge
 				if (edgeKeys.isEmpty()) {
 					return grow(numV, rnd);
 				}
 				List<String> keys = new ArrayList<>(edgeKeys);
-				String key = keys.get(rnd.nextInt(keys.size()));
-				return Op.retract(key, numV);
-			}
-			case 3: { // forbid the current colour of some vertex
+				String retractKey = keys.get(rnd.nextInt(keys.size()));
+				return Op.retract(retractKey, numV);
+			case 3: // forbid the current colour of some vertex
 				if (model == null) { // previous shot UNSAT — no colour to reject; do structural work instead
 					return grow(numV, rnd);
 				}
@@ -409,7 +410,6 @@ public final class IncrementalColoringBenchmark {
 					}
 				}
 				return grow(numV, rnd);
-			}
 			default: // case 0: grow (GROW_PER_SHOT pendants per shot)
 				return grow(numV, rnd, GROW_PER_SHOT);
 		}
@@ -501,7 +501,8 @@ public final class IncrementalColoringBenchmark {
 			if (a == b) {
 				continue;
 			}
-			int lo = Math.min(a, b), hi = Math.max(a, b);
+			int lo = Math.min(a, b);
+			int hi = Math.max(a, b);
 			if (edgeKeysOut.add(lo + "," + hi)) {
 				facts.add(edgeFact(lo, hi));
 			}
