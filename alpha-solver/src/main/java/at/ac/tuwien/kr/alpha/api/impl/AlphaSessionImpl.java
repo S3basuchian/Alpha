@@ -264,7 +264,7 @@ public final class AlphaSessionImpl implements AlphaSession {
 				retractionThisShot = false;
 			} else {
 				// Monotone (add-only) shot: full trail clear T ← ∅, purge the previous shot's enumeration and
-				// foundedness-tainted (ENUMERATION-tagged) nogoods, keep the sound LEARNT nogoods for cross-shot
+				// foundedness-tainted (TRANSIENT-tagged) nogoods, keep the sound LEARNT nogoods for cross-shot
 				// reuse, re-force the surviving units, and reset VSIDS. This is the dual of the retraction case:
 				// a fact added this shot can found a previously-unfounded atom, so nothing foundedness-derived may
 				// survive — the unconditional enumeration purge guarantees that. Structural nogoods are kept (no

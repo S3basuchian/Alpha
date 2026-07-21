@@ -95,7 +95,7 @@ public class ChoiceManager implements Checkable {
 		for (Choice e : choiceStack) {
 			enumerationLiterals[enumerationPos++] = atomToLiteral(e.getAtom(), e.getTruthValue());
 		}
-		return NoGood.enumeration(enumerationLiterals);
+		return NoGood.transientNoGood(enumerationLiterals);
 	}
 
 	@Override

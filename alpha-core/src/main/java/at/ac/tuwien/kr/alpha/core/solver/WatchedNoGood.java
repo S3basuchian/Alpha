@@ -147,8 +147,8 @@ public final class WatchedNoGood implements NoGoodInterface, Antecedent {
 	}
 
 	@Override
-	public boolean fromEnumeration() {
-		return type == Type.ENUMERATION;
+	public boolean fromTransient() {
+		return type == Type.TRANSIENT;
 	}
 
 	@Override

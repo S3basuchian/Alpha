@@ -106,7 +106,7 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 
 	/**
 	 * Set to {@code true} when {@link #prepareForSubsequentAnswerSet()} added an enumeration nogood to the
-	 * store. The between-shot reset ({@link #resetInPlace}) purges enumeration nogoods unconditionally and
+	 * store. The between-shot reset ({@link #resetInPlace}) purges all transient nogoods unconditionally and
 	 * clears this flag; it is kept for its diagnostic value.
 	 */
 	private boolean enumerationUsed = false;
@@ -211,7 +211,7 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 	 * Resets this solver for a fresh monotone (add-only) shot on the extended program state, keeping the live
 	 * solver and its entire nogood store (structural nogoods and their watches are untouched — no re-ingest).
 	 * The whole trail is cleared (T ← ∅), so every ordinary two-watched-literal watch is trivially valid; the
-	 * previous shot's enumeration nogoods (and any foundedness-tainted resolvents, tagged ENUMERATION) are
+	 * previous shot's enumeration nogoods (and any foundedness-tainted resolvents, tagged TRANSIENT) are
 	 * purged; the ordinary LEARNT nogoods are kept — they are classical resolvents, entailed by N_s ∪ N_l and
 	 * monotone under add_F/add_C, so they stay sound across an add-only shot. The surviving fact/structural
 	 * units are re-forced at dl 0 and VSIDS activity is reset. The caller passes every surviving unit nogood,
@@ -238,7 +238,7 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 	/**
 	 * The single in-place reset shared by the monotone ({@link #resetForNewShot(Collection)}) and retraction
 	 * ({@link #retractInPlace(Collection)}) shot boundaries. Backjump to dl 0; purge the previous shot's
-	 * enumeration / foundedness-tainted (ENUMERATION-tagged) nogoods while the trail is still populated so their
+	 * enumeration / foundedness-tainted (TRANSIENT-tagged) nogoods while the trail is still populated so their
 	 * dl-0 propagations are undone; {@link WritableAssignment#clear() clear the whole trail} (T ← ∅), after
 	 * which every kept watch is trivially valid; optionally drop all learned nogoods; re-register the choice
 	 * callbacks that {@code clear()} wiped; {@link NoGoodStore#reassertUnits(Collection) re-force the surviving
@@ -253,11 +253,11 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 		}
 		// AlphaInc transient nogoods N_t (Algorithm 2 tagging & Lemma 3 of "Boosting ASP by Incremental Lazy
 		// Grounding"): enumeration, completion and foundedness nogoods are NOT program-monotone, so they — and
-		// every learned resolvent tainted through them (tagged ENUMERATION) — must not cross the shot boundary.
+		// every learned resolvent tainted through them (tagged TRANSIENT) — must not cross the shot boundary.
 		// Detach the previous shot's enumeration nogoods (and any foundedness-tainted resolvents, tagged
-		// ENUMERATION) while the trail is still populated so their dl-0 propagations are undone. Unconditional:
+		// TRANSIENT) while the trail is still populated so their dl-0 propagations are undone. Unconditional:
 		// a purge with no enumeration nogoods present is a no-op.
-		store.purgeEnumerationNoGoods();
+		store.purgeTransientNoGoods();
 		enumerationUsed = false;
 		assignment.clear();   // T ← ∅ : every ordinary watch is trivially valid after a full clear
 		if (dropAllLearned) {
@@ -399,11 +399,11 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 
 		choiceManager.backjump(analysisResult.backjumpLevel);
 		NoGood learnedNoGood = analysisResult.learnedNoGood;
-		if (analysisResult.enumerationDerived) {
-			// Conflict analysis resolved through an enumeration nogood, so this resolvent is sound only for
-			// the answer-set-blocked program. Register it as enumeration-scoped so it is purged with N_e at
+		if (analysisResult.transientDerived) {
+			// Conflict analysis resolved through a transient nogood, so this resolvent is sound only for the
+			// shot's temporarily-restricted program. Register it as transient so it is purged with N_t at
 			// the shot boundary instead of persisting unsoundly in the learned-nogood store across shots.
-			learnedNoGood = learnedNoGood.asEnumeration();
+			learnedNoGood = learnedNoGood.asTransient();
 		}
 		int noGoodId = grounder.register(learnedNoGood);
 		return addAndBackjumpIfNecessary(noGoodId, learnedNoGood, analysisResult.lbd);
@@ -449,13 +449,13 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 		for (Literal literal : reasonsForUnjustified) {
 			reasons[arrpos++] = atomToLiteral(atomStore.get(literal.getAtom()), !literal.isNegated());
 		}
-		// DESIGN (B) EXPERIMENT: tag foundedness (justification) nogoods as ENUMERATION so they — and, via the
-		// existing enumeration taint (Antecedent.fromEnumeration -> ConflictAnalysisResult.enumerationDerived ->
-		// asEnumeration), every learned nogood that resolves through one — are dropped by purgeEnumerationNoGoods
+		// DESIGN (B) EXPERIMENT: tag foundedness (justification) nogoods as TRANSIENT so they — and, via the
+		// existing transient taint (Antecedent.fromTransient -> ConflictAnalysisResult.transientDerived ->
+		// asTransient), every learned nogood that resolves through one — are dropped by purgeTransientNoGoods
 		// at the contaminated shot boundary, while ordinary LEARNT nogoods are KEPT. This tests whether we can
 		// preserve the sound learned nogoods (drop only the foundedness-tainted subset) instead of dropping N_l
 		// wholesale. In batch (single shot) nothing is ever purged, so the tag only affects lifecycle.
-		return NoGood.enumeration(reasons);
+		return NoGood.transientNoGood(reasons);
 	}
 
 	private boolean treatConflictAfterClosing(Antecedent violatedNoGood) {

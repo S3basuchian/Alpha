@@ -144,7 +144,7 @@ public class NaiveNoGoodStore implements NoGoodStore {
 	}
 
 	@Override
-	public void purgeEnumerationNoGoods() {
+	public void purgeTransientNoGoods() {
 		// NaiveNoGoodStore is a debug/benchmarking store and does not separately track enumeration
 		// nogoods. Session-mode multi-shot solving with enumeration is only correct with the default
 		// NoGoodStoreAlphaRoaming. Refuse rather than silently leave stale enumeration nogoods in the

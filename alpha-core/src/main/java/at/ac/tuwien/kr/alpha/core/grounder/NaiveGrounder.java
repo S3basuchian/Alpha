@@ -124,7 +124,7 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 	 * Session mode only: set whenever the accumulated program changes ({@link #extendWithRules},
 	 * {@link #extendWithFacts}, {@link #retractFacts}) so that the next {@link #getNoGoods(Assignment)} recomputes
 	 * the unique-head set from the current program and refreshes the {@link NoGoodGenerator}. This keeps the
-	 * ENUMERATION-tagged support nogoods sound: a head that gained a fact or a second defining rule no longer
+	 * TRANSIENT-tagged support nogoods sound: a head that gained a fact or a second defining rule no longer
 	 * receives one. The program is fixed within a shot, so one recompute per change is enough.
 	 */
 	private boolean uniqueHeadSetDirty = false;
@@ -633,7 +633,7 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 		// Session mode: the unique-head support ("only-via"/completion) nogood {Tp, F(body)} is non-monotone — a
 		// fact or a second defining rule for p added in a LATER shot gives p another support and falsifies it
 		// (e.g. "{a}. p:-a." then adding fact "p." would lose the answer set {p}). Rather than forgo the
-		// optimisation, session mode emits it tagged ENUMERATION (see NoGoodGenerator) so the between-shot purge
+		// optimisation, session mode emits it tagged TRANSIENT (see NoGoodGenerator) so the between-shot purge
 		// drops it and taints any learned resolvent, the dual of how foundedness nogoods are handled. Soundness
 		// then only requires that the set be computed against the CURRENT accumulated program — knownNonGroundRules
 		// (which grows with extendWithRules, unlike the frozen `program`) and the live factsFromProgram — so a head
@@ -684,7 +684,7 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 	 * (which grows across shots via {@link #extendWithRules}) rather than the frozen construction-time
 	 * {@code program.getPredicateDefiningRules()}, and facts from the live {@link #factsFromProgram}. This makes a
 	 * head that has since gained a second defining rule or a fact drop out of the set, which is exactly what keeps
-	 * the ENUMERATION-tagged support nogoods sound: none is ever emitted for a head that currently has another
+	 * the TRANSIENT-tagged support nogoods sound: none is ever emitted for a head that currently has another
 	 * support. The program does not change within a shot, so recomputing once per program change (see the
 	 * {@code uniqueHeadSetDirty} drain in {@link #getNoGoods(Assignment)}) suffices.
 	 */

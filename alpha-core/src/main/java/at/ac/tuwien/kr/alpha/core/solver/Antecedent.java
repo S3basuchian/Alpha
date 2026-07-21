@@ -15,12 +15,12 @@ public interface Antecedent {
 	void decreaseActivity();
 
 	/**
-	 * @return {@code true} if this antecedent originates from a {@link at.ac.tuwien.kr.alpha.core.common.NoGoodInterface.Type#ENUMERATION}
+	 * @return {@code true} if this antecedent originates from a {@link at.ac.tuwien.kr.alpha.core.common.NoGoodInterface.Type#TRANSIENT}
 	 * nogood (a solution-blocking nogood, or a learned nogood re-classified as enumeration-scoped). Conflict
 	 * analysis uses this to detect when a learned nogood resolved through an enumeration nogood and is therefore
 	 * sound only for the answer-set-blocked program. Defaults to {@code false}.
 	 */
-	default boolean fromEnumeration() {
+	default boolean fromTransient() {
 		return false;
 	}
 

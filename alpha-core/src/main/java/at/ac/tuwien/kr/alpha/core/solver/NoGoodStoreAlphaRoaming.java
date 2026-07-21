@@ -93,7 +93,7 @@ public class NoGoodStoreAlphaRoaming implements NoGoodStore, BinaryNoGoodPropaga
 	private final NoGoodCounter counter = new NoGoodCounter();
 
 	/**
-	 * Enumeration nogoods that ended up watched (size &gt;= 3). Tracked so {@link #purgeEnumerationNoGoods()}
+	 * Enumeration nogoods that ended up watched (size &gt;= 3). Tracked so {@link #purgeTransientNoGoods()}
 	 * can drop them from the ordinary watch lists between shots without disturbing structural / learned
 	 * nogoods.
 	 */
@@ -107,7 +107,7 @@ public class NoGoodStoreAlphaRoaming implements NoGoodStore, BinaryNoGoodPropaga
 
 	/**
 	 * Unary enumeration nogoods. Each one forced its sole atom at decision level 0 via {@link #addUnary};
-	 * {@link #purgeEnumerationNoGoods()} undoes those assignments and decrements the counter.
+	 * {@link #purgeTransientNoGoods()} undoes those assignments and decrements the counter.
 	 */
 	private final ArrayList<NoGood> enumerationUnaryNoGoods = new ArrayList<>();
 
@@ -245,7 +245,7 @@ public class NoGoodStoreAlphaRoaming implements NoGoodStore, BinaryNoGoodPropaga
 	}
 
 	@Override
-	public void purgeEnumerationNoGoods() {
+	public void purgeTransientNoGoods() {
 		// Detach the shot's enumeration nogoods from the store's watch lists (multi-ary + binary), and drop
 		// the unary tracking. The dl-0 atoms these nogoods forced are un-assigned by the solver's full trail
 		// clear ({@link WritableAssignment#clear()}) in the between-shot reset, so no dependency cascade is
@@ -301,16 +301,16 @@ public class NoGoodStoreAlphaRoaming implements NoGoodStore, BinaryNoGoodPropaga
 	public ConflictCause add(int id, NoGood noGood, int lbd) {
 		LOGGER.trace("Adding {}", noGood);
 
-		final boolean isEnumeration = noGood.getType() == Type.ENUMERATION;
+		final boolean isTransient = noGood.getType() == Type.TRANSIENT;
 		final boolean isLearnt = noGood.getType() == Type.LEARNT;
 		final ConflictCause conflictCause;
 		if (noGood.isUnary()) {
 			conflictCause = addUnary(noGood);
 			if (conflictCause == null) {
 				// addUnary directly assigns the complement of the literal at the current decision level.
-				// Enumeration unaries leave a dl-0 propagation behind that purgeEnumerationNoGoods un-does;
+				// Enumeration unaries leave a dl-0 propagation behind that purgeTransientNoGoods un-does;
 				// learned unaries are tracked so dropAllLearnedNoGoods can drop them on retraction.
-				if (isEnumeration) {
+				if (isTransient) {
 					enumerationUnaryNoGoods.add(noGood);
 				} else if (isLearnt) {
 					learnedUnaryNoGoods.add(noGood);
@@ -319,7 +319,7 @@ public class NoGoodStoreAlphaRoaming implements NoGoodStore, BinaryNoGoodPropaga
 		} else if (noGood.isBinary()) {
 			conflictCause = addAndWatchBinary(noGood);
 			if (conflictCause == null) {
-				if (isEnumeration) {
+				if (isTransient) {
 					enumerationBinaryNoGoods.add(noGood);
 				} else if (isLearnt) {
 					learnedBinaryNoGoods.add(noGood);
@@ -510,7 +510,7 @@ public class NoGoodStoreAlphaRoaming implements NoGoodStore, BinaryNoGoodPropaga
 		}
 
 		// Record for between-shot removal if this NoGood blocks an already-found answer set.
-		if (noGood.getType() == Type.ENUMERATION) {
+		if (noGood.getType() == Type.TRANSIENT) {
 			enumerationWatchedNoGoods.add(wng);
 		}
 
@@ -876,7 +876,7 @@ public class NoGoodStoreAlphaRoaming implements NoGoodStore, BinaryNoGoodPropaga
 			}
 			int otherLiteral = noGood.getLiteral(0) == forLiteral ? noGood.getLiteral(1) : noGood.getLiteral(0);
 			noGoodsWithoutHead[noGoodsWithoutHeadSize++] = otherLiteral;
-			if (noGood.getType() == Type.ENUMERATION) {
+			if (noGood.getType() == Type.TRANSIENT) {
 				enumerationOtherLiterals.add(otherLiteral);
 			}
 			// Assign otherLiteral if the newly added NoGood is unit.
@@ -932,19 +932,19 @@ public class NoGoodStoreAlphaRoaming implements NoGoodStore, BinaryNoGoodPropaga
 		public Antecedent instantiateAntecedent(int impliedLiteral) {
 			// Propagation passes the stored other-literal; a conflict passes its negation. Check both so the
 			// flag is correct in either case (worst case an over-approximation, which stays sound).
-			boolean fromEnumeration = enumerationOtherLiterals.contains(impliedLiteral)
+			boolean fromTransient = enumerationOtherLiterals.contains(impliedLiteral)
 					|| enumerationOtherLiterals.contains(negateLiteral(impliedLiteral));
-			return new BinaryAntecedent(impliedLiteral, forLiteral, fromEnumeration);
+			return new BinaryAntecedent(impliedLiteral, forLiteral, fromTransient);
 		}
 
 		private class BinaryAntecedent implements Antecedent {
 			private final int[] literals = new int[2];
-			private final boolean fromEnumeration;
+			private final boolean fromTransient;
 
-			BinaryAntecedent(int lit1, int lit2, boolean fromEnumeration) {
+			BinaryAntecedent(int lit1, int lit2, boolean fromTransient) {
 				literals[0] = lit1;
 				literals[1] = lit2;
-				this.fromEnumeration = fromEnumeration;
+				this.fromTransient = fromTransient;
 			}
 
 			@Override
@@ -961,8 +961,8 @@ public class NoGoodStoreAlphaRoaming implements NoGoodStore, BinaryNoGoodPropaga
 			}
 
 			@Override
-			public boolean fromEnumeration() {
-				return fromEnumeration;
+			public boolean fromTransient() {
+				return fromTransient;
 			}
 
 			@Override

@@ -166,11 +166,11 @@ public class NoGoodGenerator {
 		if (uniqueGroundRulePerGroundHead.contains(nonGroundRule)) {
 			// In session (keepFactsAsLiterals) mode the support ("only-via"/completion) nogood is non-monotone —
 			// a fact or a second defining rule added for the head in a later shot gives it another support and
-			// falsifies it — so tag it ENUMERATION: the between-shot purge drops it and taints any learned
+			// falsifies it — so tag it TRANSIENT: the between-shot purge drops it and taints any learned
 			// resolvent, exactly as for foundedness nogoods. In one-shot mode the program is fixed, so keep the
 			// permanent SUPPORT tag.
 			result.add(keepFactsAsLiterals
-					? NoGood.supportEnumeration(headLiteral, bodyRepresentingLiteral)
+					? NoGood.supportTransient(headLiteral, bodyRepresentingLiteral)
 					: NoGood.support(headLiteral, bodyRepresentingLiteral));
 		}
 

@@ -215,7 +215,7 @@ final class SessionGrounder implements ProgramAnalyzingGrounder {
 		// shot boundary (enumeration: every shot; learned: on retraction). Otherwise a later constraint that
 		// grounds to a structurally-identical nogood would be deduped away and lost.
 		NoGoodInterface.Type type = noGood.getType();
-		if (type == NoGoodInterface.Type.ENUMERATION) {
+		if (type == NoGoodInterface.Type.TRANSIENT) {
 			registeredEnumerationIds.add(id);
 		} else if (type == NoGoodInterface.Type.LEARNT) {
 			registeredLearnedIds.add(id);

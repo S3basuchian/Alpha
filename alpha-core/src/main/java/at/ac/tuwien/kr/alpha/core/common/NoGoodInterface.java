@@ -93,12 +93,19 @@ public interface NoGoodInterface extends Iterable<Integer> {
 		INTERNAL,
 
 		/**
-		 * Shot-local nogood blocking an already-enumerated answer set. Added by
-		 * {@code DefaultSolver.prepareForSubsequentAnswerSet} to prevent re-discovery of an answer set
-		 * within the current shot. Removable: a session must purge these between shots because they are
-		 * only valid for the program at the time the answer set was found and would invalidly block
-		 * valid answer sets of an extended program.
+		 * A <em>transient</em> nogood (the paper's N_t in "Boosting ASP by Incremental Lazy Grounding"): valid
+		 * only within the current solving shot and purged before the next one, because it is not
+		 * program-monotone (a later add/retract can invalidate it). Three kinds share this tag:
+		 * <ul>
+		 *   <li><b>enumeration</b> nogoods, blocking an already-found answer set (added by
+		 *       {@code DefaultSolver.prepareForSubsequentAnswerSet});</li>
+		 *   <li><b>completion</b> (Clark "only-if"/support) nogoods emitted in session mode; and</li>
+		 *   <li><b>foundedness</b> (justification) nogoods.</li>
+		 * </ul>
+		 * A learned nogood that resolves through any of these inherits the tag (see {@code NoGood.asTransient()})
+		 * so it is dropped too. All are removed by {@code NoGoodStore.purgeTransientNoGoods()} at the shot
+		 * boundary (Algorithm 2 tagging / Lemma 3).
 		 */
-		ENUMERATION,
+		TRANSIENT,
 	}
 }

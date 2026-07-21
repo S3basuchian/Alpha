@@ -108,14 +108,14 @@ public class GroundConflictNoGoodLearner {
 		 * True if conflict analysis resolved through an enumeration nogood, so the learned nogood is sound only
 		 * for the answer-set-blocked program and must not be retained across shots.
 		 */
-		public final boolean enumerationDerived;
+		public final boolean transientDerived;
 
 		private ConflictAnalysisResult() {
 			learnedNoGood = null;
 			backjumpLevel = -1;
 			resolutionAtoms = null;
 			lbd = LBD_NO_VALUE;
-			enumerationDerived = false;
+			transientDerived = false;
 		}
 
 		public ConflictAnalysisResult(NoGood learnedNoGood, int backjumpLevel, Collection<Integer> resolutionAtoms) {
@@ -126,7 +126,7 @@ public class GroundConflictNoGoodLearner {
 			this(learnedNoGood, backjumpLevel, resolutionAtoms, lbd, false);
 		}
 
-		public ConflictAnalysisResult(NoGood learnedNoGood, int backjumpLevel, Collection<Integer> resolutionAtoms, int lbd, boolean enumerationDerived) {
+		public ConflictAnalysisResult(NoGood learnedNoGood, int backjumpLevel, Collection<Integer> resolutionAtoms, int lbd, boolean transientDerived) {
 			if (backjumpLevel < 0) {
 				throw oops("Backjumping level is smaller than 0");
 			}
@@ -135,7 +135,7 @@ public class GroundConflictNoGoodLearner {
 			this.backjumpLevel = backjumpLevel;
 			this.resolutionAtoms = resolutionAtoms;
 			this.lbd = lbd;
-			this.enumerationDerived = enumerationDerived;
+			this.transientDerived = transientDerived;
 		}
 
 		@Override
@@ -212,7 +212,7 @@ public class GroundConflictNoGoodLearner {
 		// Track whether any nogood resolved through (the conflicting one, or any antecedent expanded at the
 		// current decision level below) is an enumeration nogood. If so, the learned resolvent is sound only
 		// for the answer-set-blocked program and must be registered as enumeration-scoped by the caller.
-		boolean enumerationDerived = conflictReason.fromEnumeration();
+		boolean transientDerived = conflictReason.fromTransient();
 		conflictReason.bumpActivity();
 		TrailAssignment.TrailBackwardsWalker trailWalker = ((TrailAssignment)assignment).getTrailBackwardsWalker();
 		if (LOGGER.isTraceEnabled()) {
@@ -257,7 +257,7 @@ public class GroundConflictNoGoodLearner {
 			Antecedent impliedBy = assignment.getImpliedBy(nextAtom);
 			if (impliedBy != null) {
 				currentConflictReason = impliedBy.getReasonLiterals();
-				enumerationDerived |= impliedBy.fromEnumeration();
+				transientDerived |= impliedBy.fromTransient();
 				impliedBy.bumpActivity();
 			}
 			processedAtoms.add(nextAtom);
@@ -268,7 +268,7 @@ public class GroundConflictNoGoodLearner {
 		MinimizationResult minimization = minimizeLearnedLiterals(resolutionLiterals, seenAtoms);
 		int[] learnedLiterals = minimization.literals;
 		// Minimization may have resolved through an enumeration nogood the 1UIP walk never visited.
-		enumerationDerived |= minimization.enumerationDerived;
+		transientDerived |= minimization.transientDerived;
 
 		NoGood learnedNoGood = NoGood.learnt(learnedLiterals);
 		if (LOGGER.isTraceEnabled()) {
@@ -286,22 +286,22 @@ public class GroundConflictNoGoodLearner {
 		if (LOGGER.isTraceEnabled()) {
 			LOGGER.trace("Backjumping decision level: {}", backjumpingDecisionLevel);
 		}
-		return new ConflictAnalysisResult(learnedNoGood, backjumpingDecisionLevel, resolutionAtoms, computeLBD(learnedLiterals), enumerationDerived);
+		return new ConflictAnalysisResult(learnedNoGood, backjumpingDecisionLevel, resolutionAtoms, computeLBD(learnedLiterals), transientDerived);
 	}
 
 	/**
 	 * Result of local clause minimization: the surviving literals, and whether any literal was resolved away
-	 * through an enumeration(-scoped) nogood. The latter taints the whole learned nogood — it is then an
-	 * implicate of {@code N_s ∪ N_ℓ ∪ N_e}, not of {@code N_s ∪ N_ℓ}, and must be enumeration-scoped so it is
-	 * purged with the enumeration nogoods at the shot boundary rather than persisting unsoundly.
+	 * through a transient nogood. The latter taints the whole learned nogood — it is then an implicate of
+	 * {@code N_s ∪ N_ℓ ∪ N_t}, not of {@code N_s ∪ N_ℓ}, and must be marked transient so it is purged with the
+	 * other transient nogoods at the shot boundary rather than persisting unsoundly.
 	 */
 	private static final class MinimizationResult {
 		final int[] literals;
-		final boolean enumerationDerived;
+		final boolean transientDerived;
 
-		MinimizationResult(int[] literals, boolean enumerationDerived) {
+		MinimizationResult(int[] literals, boolean transientDerived) {
 			this.literals = literals;
-			this.enumerationDerived = enumerationDerived;
+			this.transientDerived = transientDerived;
 		}
 	}
 
@@ -314,7 +314,7 @@ public class GroundConflictNoGoodLearner {
 		// minimization would survive the shot-boundary purge tagged LEARNT and unsoundly block a valid answer
 		// set in a later shot. Tracked here (the 1UIP walk cannot see it: it never visits these lower-level
 		// literals' antecedents).
-		boolean enumerationDerived = false;
+		boolean transientDerived = false;
 		// Do local clause minimization: if an implied literal has all its antecedents seen (i.e., in the clause already), it can be removed.
 		learnedLiteralsLoop:
 		for (Integer resolutionLiteral : resolutionLiterals) {
@@ -322,8 +322,8 @@ public class GroundConflictNoGoodLearner {
 			if (assignment.getWeakDecisionLevel(atomOf(resolutionLiteral)) == 0) {
 				// Skip literals from decision level 0. Dropping such a literal resolves it away through the
 				// nogood that forced it at the root; if that is enumeration-scoped, the resolvent is tainted.
-				if (antecedent != null && antecedent.fromEnumeration()) {
-					enumerationDerived = true;
+				if (antecedent != null && antecedent.fromTransient()) {
+					transientDerived = true;
 				}
 				continue;
 			}
@@ -340,8 +340,8 @@ public class GroundConflictNoGoodLearner {
 				}
 				// Self-subsumption: resolutionLiteral is removed by resolving through its antecedent. An
 				// enumeration-scoped antecedent taints the resolvent.
-				if (antecedent.fromEnumeration()) {
-					enumerationDerived = true;
+				if (antecedent.fromTransient()) {
+					transientDerived = true;
 				}
 			}
 		}
@@ -349,7 +349,7 @@ public class GroundConflictNoGoodLearner {
 		if (i < resolutionLiterals.size()) {
 			learnedLiterals = Arrays.copyOf(learnedLiterals, i);
 		}
-		return new MinimizationResult(learnedLiterals, enumerationDerived);
+		return new MinimizationResult(learnedLiterals, transientDerived);
 	}
 
 	private int computeLBD(int[] literals) {

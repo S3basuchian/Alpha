@@ -57,7 +57,7 @@ public interface NoGoodStore {
 	void cleanupLearnedNoGoods();
 
 	/**
-	 * Drops every nogood of {@link at.ac.tuwien.kr.alpha.core.common.NoGoodInterface.Type#ENUMERATION} from the
+	 * Drops every nogood of {@link at.ac.tuwien.kr.alpha.core.common.NoGoodInterface.Type#TRANSIENT} from the
 	 * store: removes them from watch lists, undoes any decision-level-0 assignments they forced, and resets
 	 * the type/cardinality counters. Structural and learned nogoods are untouched.
 	 *
@@ -70,7 +70,7 @@ public interface NoGoodStore {
 	 * residue (unary enumeration nogoods that forced a literal at dl 0). It is a no-op if no enumeration
 	 * nogoods are recorded.
 	 */
-	void purgeEnumerationNoGoods();
+	void purgeTransientNoGoods();
 
 	/**
 	 * Drops every learned nogood from the store (used by the in-place fact-retraction path). A learned

@@ -1,6 +1,5 @@
 package at.ac.tuwien.kr.alpha.core.solver;
 
-import static at.ac.tuwien.kr.alpha.core.common.NoGood.enumeration;
 import java.util.Map;
 import static at.ac.tuwien.kr.alpha.core.common.NoGood.fact;
 import static at.ac.tuwien.kr.alpha.core.common.NoGood.headFirst;

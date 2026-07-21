@@ -51,7 +51,7 @@ import at.ac.tuwien.kr.alpha.api.programs.atoms.Atom;
  *       learned nogoods), and branching heuristic activity scores. Closing assignments from the
  *       previous shot's answer set are cleared; enumeration nogoods accumulated when the previous
  *       shot enumerated all answer sets are purged in-place via
- *       {@code NoGoodStore.purgeEnumerationNoGoods()}.</li>
+ *       {@code NoGoodStore.purgeTransientNoGoods()}.</li>
  *   <li><b>Fact retraction</b> keeps the grounder + atom store + VSIDS scores + the live solver, but
  *       <em>discards all learned nogoods</em> via a fresh rebuild (learned nogoods die with the discarded solver):
  *       any learned nogood whose derivation chain referenced the retracted fact's unit nogood may

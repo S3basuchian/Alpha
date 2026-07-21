@@ -35,7 +35,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.stream.IntStream;
 
-import static at.ac.tuwien.kr.alpha.core.common.NoGoodInterface.Type.ENUMERATION;
+import static at.ac.tuwien.kr.alpha.core.common.NoGoodInterface.Type.TRANSIENT;
 import static at.ac.tuwien.kr.alpha.core.common.NoGoodInterface.Type.INTERNAL;
 import static at.ac.tuwien.kr.alpha.core.common.NoGoodInterface.Type.LEARNT;
 import static at.ac.tuwien.kr.alpha.core.common.NoGoodInterface.Type.STATIC;
@@ -94,8 +94,8 @@ public class NoGood implements NoGoodInterface, Comparable<NoGood> {
 		return new NoGood(LEARNT, literals);
 	}
 
-	public static NoGood enumeration(int... literals) {
-		return new NoGood(ENUMERATION, literals);
+	public static NoGood transientNoGood(int... literals) {
+		return new NoGood(TRANSIENT, literals);
 	}
 
 	public static NoGood headFirst(int... literals) {
@@ -120,15 +120,15 @@ public class NoGood implements NoGoodInterface, Comparable<NoGood> {
 
 	/**
 	 * The same {@code {Tp, F(body)}} support ("only-via"/completion) nogood as {@link #support(int, int)}, but
-	 * tagged {@link Type#ENUMERATION} instead of {@link Type#SUPPORT}. Used in session (incremental) mode: a
+	 * tagged {@link Type#TRANSIENT} instead of {@link Type#SUPPORT}. Used in session (incremental) mode: a
 	 * support nogood is non-monotone — a fact or a second defining rule added for {@code p} in a later shot
 	 * gives {@code p} another support and falsifies it — so it must not survive a shot boundary. Tagging it
-	 * ENUMERATION routes it through the same between-shot purge ({@link Type#ENUMERATION} nogoods are dropped by
-	 * {@code NoGoodStore.purgeEnumerationNoGoods}) and the same resolution taint (any learned nogood resolving
-	 * through it becomes ENUMERATION and is purged too) that already handle foundedness nogoods.
+	 * TRANSIENT routes it through the same between-shot purge ({@link Type#TRANSIENT} nogoods are dropped by
+	 * {@code NoGoodStore.purgeTransientNoGoods}) and the same resolution taint (any learned nogood resolving
+	 * through it becomes TRANSIENT and is purged too) that already handle foundedness nogoods.
 	 */
-	public static NoGood supportEnumeration(int headLiteral, int bodyRepresentingLiteral) {
-		return new NoGood(ENUMERATION, headLiteral, negateLiteral(bodyRepresentingLiteral));
+	public static NoGood supportTransient(int headLiteral, int bodyRepresentingLiteral) {
+		return new NoGood(TRANSIENT, headLiteral, negateLiteral(bodyRepresentingLiteral));
 	}
 
 	public static NoGood fromConstraint(List<Integer> posLiterals, List<Integer> negLiterals) {
@@ -183,8 +183,8 @@ public class NoGood implements NoGoodInterface, Comparable<NoGood> {
 			}
 
 			@Override
-			public boolean fromEnumeration() {
-				return NoGood.this.type == ENUMERATION;
+			public boolean fromTransient() {
+				return NoGood.this.type == TRANSIENT;
 			}
 
 			@Override
@@ -199,13 +199,14 @@ public class NoGood implements NoGoodInterface, Comparable<NoGood> {
 	}
 
 	/**
-	 * Returns a copy of this NoGood tagged as {@link Type#ENUMERATION}. Used to re-classify a learned
-	 * nogood whose derivation may have resolved through an enumeration nogood: such a resolvent is sound
-	 * only for the answer-set-blocked program, so it must be purged together with the enumeration nogoods
-	 * at the next shot boundary instead of persisting (unsoundly) in the learned-nogood store.
+	 * Returns a copy of this NoGood tagged as {@link Type#TRANSIENT}. Used to re-classify a learned
+	 * nogood whose derivation may have resolved through a transient nogood (enumeration, completion, or
+	 * foundedness): such a resolvent is sound only for the shot's temporarily-restricted program, so it
+	 * must be purged together with the other transient nogoods at the next shot boundary instead of
+	 * persisting (unsoundly) in the learned-nogood store.
 	 */
-	public NoGood asEnumeration() {
-		return new NoGood(ENUMERATION, literals.clone());
+	public NoGood asTransient() {
+		return new NoGood(TRANSIENT, literals.clone());
 	}
 
 	/**

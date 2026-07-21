@@ -24,7 +24,7 @@ import at.ac.tuwien.kr.alpha.api.impl.AlphaImpl;
  *            un-assigned.
  *   rebuild — consume all answer sets per shot. Enumeration nogoods added during the previous
  *            shot to block already-seen answer sets are purged in-place between shots via
- *            {@code NoGoodStore.purgeEnumerationNoGoods()}; the solver itself is reused (same
+ *            {@code NoGoodStore.purgeTransientNoGoods()}; the solver itself is reused (same
  *            path as live, plus enumeration-purge bookkeeping). Pre-purge, this mode used to
  *            force a full solver rebuild on the next shot.
  *   batch  — destroy & rebuild the session each shot from scratch. Classic baseline.
