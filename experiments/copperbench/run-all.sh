@@ -58,7 +58,7 @@ done
 
 cat <<EOF
 
-==> all five benchmarks submitted from $RUN_DIR.
+==> all benchmarks submitted from $RUN_DIR.
     watch the queue:   squeue -u "\$USER"
     when finished, collect (CSV + tables.tex):
         python3 experiments/copperbench/postprocess/collect.py --results-dir "$RUN_DIR"

@@ -79,7 +79,9 @@ tasks.register<JavaExec>("runIncrementalExample") {
 	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalSolvingExample")
 }
 
-// The incremental benchmark suite — exactly four drivers (see examples/*/README.md).
+// Gradle launchers for the incremental benchmark drivers (see the "Incremental multi-shot benchmarks"
+// section of the top-level README). The groundexp (model-forbid) and walk drivers are launched directly
+// via `java -cp` from the copperbench wrappers and have no dedicated gradle task.
 
 // JavaExec forks a fresh JVM that does NOT inherit -D system properties from the gradle invocation, so
 // benchmark tuning flags (alpha.* / coloring.*) passed on the command line would be silently dropped.
@@ -92,17 +94,9 @@ fun JavaExec.forwardBenchmarkSystemProperties() {
 	}
 }
 
-tasks.register<JavaExec>("runIncrementalGroundExplosionConstraintBenchmark") {
-	group = "examples"
-	description = "Benchmark #1: ground-explosion with a fixed dom universe and streamed forbidding constraints (live vs batch)."
-	classpath = sourceSets["main"].runtimeClasspath
-	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalGroundExplosionConstraintBenchmark")
-	forwardBenchmarkSystemProperties()
-}
-
 tasks.register<JavaExec>("runIncrementalCutedgeRetractionBenchmark") {
 	group = "examples"
-	description = "Benchmark #2: cutedge iterative edge-cutting — solve, retract the AS-chosen edge, re-solve (live vs batch)."
+	description = "cutedge benchmark: iterative edge-cutting — solve, retract the AS-chosen edge, re-solve (live vs batch)."
 	classpath = sourceSets["main"].runtimeClasspath
 	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalCutedgeRetractionBenchmark")
 	forwardBenchmarkSystemProperties()
@@ -110,7 +104,7 @@ tasks.register<JavaExec>("runIncrementalCutedgeRetractionBenchmark") {
 
 tasks.register<JavaExec>("runIncrementalReachBenchmark") {
 	group = "examples"
-	description = "Benchmark #3: reachability with streamed edge additions (live vs batch)."
+	description = "reach benchmark: reachability with streamed edge additions (live vs batch)."
 	classpath = sourceSets["main"].runtimeClasspath
 	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalReachBenchmark")
 	forwardBenchmarkSystemProperties()
@@ -118,7 +112,7 @@ tasks.register<JavaExec>("runIncrementalReachBenchmark") {
 
 tasks.register<JavaExec>("runIncrementalColoringBenchmark") {
 	group = "examples"
-	description = "Benchmark #4: 5-colorability with a rotating mix of vertex/edge additions, edge retractions, and constraint additions (live vs batch)."
+	description = "coloring benchmark: 5-colorability with a rotating mix of vertex/edge additions, edge retractions, and constraint additions (live vs batch)."
 	classpath = sourceSets["main"].runtimeClasspath
 	mainClass.set("at.ac.tuwien.kr.alpha.app.examples.IncrementalColoringBenchmark")
 	forwardBenchmarkSystemProperties()
