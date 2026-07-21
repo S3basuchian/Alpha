@@ -251,6 +251,9 @@ public class DefaultSolver extends AbstractSolver implements StatisticsReporting
 		if (assignment.getDecisionLevel() > 0) {
 			choiceManager.backjump(0);
 		}
+		// AlphaInc transient nogoods N_t (Algorithm 2 tagging & Lemma 3 of "Boosting ASP by Incremental Lazy
+		// Grounding"): enumeration, completion and foundedness nogoods are NOT program-monotone, so they — and
+		// every learned resolvent tainted through them (tagged ENUMERATION) — must not cross the shot boundary.
 		// Detach the previous shot's enumeration nogoods (and any foundedness-tainted resolvents, tagged
 		// ENUMERATION) while the trail is still populated so their dl-0 propagations are undone. Unconditional:
 		// a purge with no enumeration nogoods present is a no-op.

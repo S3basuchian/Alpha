@@ -35,6 +35,11 @@ import at.ac.tuwien.kr.alpha.core.solver.SolverFactory;
  * {@link #solve} call, a long-lived {@link AtomStore} + {@link NaiveGrounder} pair wrapped in a
  * {@link SessionGrounder} that can replay cumulative grounder state to fresh solver instances when needed.
  *
+ * <p>This class realizes <b>AlphaInc</b> (Algorithm 1 of "Boosting ASP by Incremental Lazy Grounding"): a
+ * session state &sigma; = (P, N_s, N_l) — accumulated program, structural nogoods, learned nogoods — evolved
+ * by the operation stream {@code add_F}/{@code add_C}/{@code add_R} ({@link #add}), {@code retract_F}
+ * ({@link #removeFacts}) and {@code solve}. Each {@link #solve} runs one AlphaShot (Algorithm 2).
+ *
  * Semantics:
  * <ul>
  *   <li>{@link #add} parses and accumulates ASP source.</li>
@@ -315,6 +320,10 @@ public final class AlphaSessionImpl implements AlphaSession {
 			return;
 		}
 
+		// AlphaInc retract_F (Algorithm 1 case retract_F & Lemma 2 of "Boosting ASP by Incremental Lazy
+		// Grounding"): remove each retracted fact's unit nogood {Ff}_1 from the structural store N_s and drop
+		// ALL learned nogoods N_l — a learned resolvent may have been derived through {Ff}_1 and would be
+		// unsound once f is gone (learning cannot be carried across a retraction).
 		// Session-mode retraction: keep the grounder + atom store + all cumulative structural nogoods AND
 		// the live solver. Drop only the retracted facts' unit nogoods from the grounder's cumulative
 		// recording, and mark the shot so the live-solver path retracts in place: it clears the trail

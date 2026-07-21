@@ -273,6 +273,9 @@ public class NaiveGrounder extends BridgedGrounder implements ProgramAnalyzingGr
 		if (factAtomToUnitNoGoodId.containsKey(atomId)) {
 			return;
 		}
+		// AlphaInc add_F (Algorithm 1 case add_F & Lemma 1 of "Boosting ASP by Incremental Lazy Grounding"):
+		// each added fact f joins the structural store N_s as the unit nogood {Ff}_1, forcing Tf so that f is
+		// part of every future answer set and can ground newly-applicable rules on demand in later shots.
 		NoGood unit = NoGood.fact(negateLiteral(atomToLiteral(atomId)));
 		int unitId = registry.register(unit);
 		factAtomToUnitNoGoodId.put(atomId, unitId);
