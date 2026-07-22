@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""clingo drivers for the coupled Gardener's Walk receding-horizon loop.
+"""clingo drivers for the coupled Gardener receding-horizon loop.
 
 Relative-time window encoding (anchored at the current state), clingo's NATIVE idiom
 (1{...}1 cardinality choice — no shared-encoding handicap):
@@ -11,9 +11,9 @@ Relative-time window encoding (anchored at the current state), clingo's NATIVE i
           The standard clingo receding-horizon idiom: grounding paid once, upfront, fat.
 
 Skittish frogs (hop strictly toward the gardener, stay when cornered), same geometry
-as GardenersWalkBenchmark: gardener (W/2,W/2), frogs (W-4,W/2),(4,W-5).
+as GardenerBenchmark: gardener (W/2,W/2), frogs (W-4,W/2),(4,W-5).
 
-Usage: walk_clingo.py <batch|mss> <W> <h> <frogs> <shots> <seed>
+Usage: gardener_clingo.py <batch|mss> <W> <h> <frogs> <shots> <seed>
 """
 import random
 import sys
@@ -23,8 +23,8 @@ import os
 
 import clingo
 
-UNCOUPLED = os.environ.get("WALK_UNCOUPLED", "") == "1"
-DEEPEN_EVERY = int(os.environ.get("WALK_DEEPEN_EVERY", "0"))  # every N shots the horizon grows by 1
+UNCOUPLED = os.environ.get("GARDENER_UNCOUPLED", "") == "1"
+DEEPEN_EVERY = int(os.environ.get("GARDENER_DEEPEN_EVERY", "0"))  # every N shots the horizon grows by 1
 
 
 def window_rules(w, h, nf, anchors_external):
@@ -132,7 +132,7 @@ def main():
             p = [int(x) for x in line.split()]
             traj.append((p[0], [(p[1 + 2 * i], p[2 + 2 * i]) for i in range(nf)]))
         shots = min(shots, len(traj))
-    print(f"walk-clingo mode={mode} W={w} h={h} frogs={nf} shots={shots} seed={seed} "
+    print(f"gardener-clingo mode={mode} W={w} h={h} frogs={nf} shots={shots} seed={seed} "
           f"uncoupled={UNCOUPLED} replay={bool(traj)} record={bool(rec)}")
 
     ctl = None

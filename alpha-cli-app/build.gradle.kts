@@ -80,7 +80,7 @@ tasks.register<JavaExec>("runIncrementalExample") {
 }
 
 // Gradle launchers for the incremental benchmark drivers (see the "Incremental multi-shot benchmarks"
-// section of the top-level README). The groundexp (model-forbid) and walk drivers are launched directly
+// section of the top-level README). The groundexp (model-forbid) and gardener drivers are launched directly
 // via `java -cp` from the copperbench wrappers and have no dedicated gradle task.
 
 // JavaExec forks a fresh JVM that does NOT inherit -D system properties from the gradle invocation, so

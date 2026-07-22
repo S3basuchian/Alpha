@@ -26,7 +26,7 @@ import at.ac.tuwien.kr.alpha.api.programs.Predicate;
 import at.ac.tuwien.kr.alpha.api.programs.atoms.Atom;
 
 /**
- * Gardener's Walk — receding-horizon conformant planning in a live Alpha session.
+ * Gardener — receding-horizon conformant planning in a live Alpha session.
  *
  * The gardener walks a WxW garden (4 actions: N/S/E/W; walls block). Frogs are skittish:
  * each step a frog either STAYS or hops one cell strictly toward the gardener's current
@@ -40,35 +40,35 @@ import at.ac.tuwien.kr.alpha.api.programs.atoms.Atom;
  * Every shot is verified by an independent Java model checker (BFS frog cones honouring
  * walls + stay), and the executed walk is checked capture-free.
  *
- * Usage: GardenersWalkBenchmark <live|batch> <W> <h> <numFrogs> <shots> <seed> [instanceFile]
+ * Usage: GardenerBenchmark <live|batch> <W> <h> <numFrogs> <shots> <seed> [instanceFile]
  *
- * instanceFile (from gen_walk_instance.py) supplies the gardener start, seeded random frog
+ * instanceFile (from gen_gardener_instance.py) supplies the gardener start, seeded random frog
  * starts, and wall cells (free space guaranteed connected); without it, a legacy wall-free
- * instance with fixed starts is used. -Dwalk.coupled=false switches to plan-independent
- * random-walk frogs (the control column). -Dwalk.shotCapSec caps each shot's solve.
+ * instance with fixed starts is used. -Dgardener.coupled=false switches to plan-independent
+ * random-walk frogs (the control column). -Dgardener.shotCapSec caps each shot's solve.
  */
-public final class GardenersWalkBenchmark {
+public final class GardenerBenchmark {
 
 	private static final int[][] DIRS = {{0, 1}, {0, -1}, {1, 0}, {-1, 0}}; // 1=N 2=S 3=E 4=W
-	private static final int SHOT_CAP_SEC = Integer.getInteger("walk.shotCapSec", 300);
+	private static final int SHOT_CAP_SEC = Integer.getInteger("gardener.shotCapSec", 300);
 	// coupled mode (default): skittish frogs hop toward the gardener — the danger closure joins playerAt
-	private static final boolean COUPLED = !"false".equals(System.getProperty("walk.coupled"));
+	private static final boolean COUPLED = !"false".equals(System.getProperty("gardener.coupled"));
 	// re-anchor: observe the gardener's CURRENT position each shot (like the frogs, via superseded
 	// negation) instead of deriving playerAt through the whole accumulating move chain, so the
 	// gardener's true-atom set stays bounded to the current window rather than growing every shot.
-	private static final boolean REANCHOR = Boolean.getBoolean("walk.reanchor");
+	private static final boolean REANCHOR = Boolean.getBoolean("gardener.reanchor");
 	// mixed walk+deepening: every N shots the lookahead horizon grows by one (0 = fixed horizon).
 	// Rebuilders re-pay the ever-deeper window from scratch; the live session just adds a slice.
-	private static final int DEEPEN_EVERY = Integer.getInteger("walk.deepenEvery", 0);
+	private static final int DEEPEN_EVERY = Integer.getInteger("gardener.deepenEvery", 0);
 	// warm-ground / cold-search: before each live solve, retract a sacrificial tick fact to trigger
 	// the session's retraction path — keeps the grounder + atom store (no re-grounding) but rebuilds
 	// the solver (drops learned nogoods / stale search state). Tests whether live's losses are pure
 	// search-state staleness while its grounding reuse carries the win.
-	private static final boolean FRESH_SEARCH = Boolean.getBoolean("walk.freshSearch");
+	private static final boolean FRESH_SEARCH = Boolean.getBoolean("gardener.freshSearch");
 
 	public static void main(String[] args) throws Exception {
 		if (args.length < 6) {
-			System.err.println("usage: GardenersWalkBenchmark <live|batch> <W> <h> <numFrogs> <shots> <seed> [instanceFile]");
+			System.err.println("usage: GardenerBenchmark <live|batch> <W> <h> <numFrogs> <shots> <seed> [instanceFile]");
 			System.exit(2);
 		}
 		String mode = args[0];
@@ -78,22 +78,22 @@ public final class GardenersWalkBenchmark {
 		int shots = Integer.parseInt(args[4]);
 		long seed = Long.parseLong(args[5]);
 		Instance inst = args.length > 6 ? Instance.parse(args[6], w, numFrogs) : Instance.legacy(w, numFrogs);
-		// trajectory file (8th arg): with -Dwalk.record=true the driver runs its OWN loop and WRITES the
+		// trajectory file (8th arg): with -Dgardener.record=true the driver runs its OWN loop and WRITES the
 		// executed move + frog positions per shot; otherwise it READS the file and replays that exact
 		// state sequence (so every config solves an identical sequence of planning problems). The
 		// canonical reference is recorded by alpha-live on its own coherent path (warm-start intact),
 		// then replayed to the stateless / re-anchoring configs, which are indifferent to whose path it is.
-		boolean record = Boolean.getBoolean("walk.record");
+		boolean record = Boolean.getBoolean("gardener.record");
 		String trajPath = args.length > 7 ? args[7] : null;
 		List<int[]> traj = (trajPath != null && !record) ? readTraj(trajPath, numFrogs) : null;
 		if (traj != null) {
 			shots = Math.min(shots, traj.size());
 		}
-		System.out.printf("gardeners-walk mode=%s W=%d h=%d frogs=%d shots=%d seed=%d coupled=%b walls=%d replay=%b%n",
+		System.out.printf("gardener mode=%s W=%d h=%d frogs=%d shots=%d seed=%d coupled=%b walls=%d replay=%b%n",
 				mode, w, h, numFrogs, shots, seed, COUPLED, inst.walls.size(), traj != null);
 
 		ExecutorService exec = Executors.newSingleThreadExecutor(r -> {
-			Thread th = new Thread(r, "walk-solver");
+			Thread th = new Thread(r, "gardener-solver");
 			th.setDaemon(true);
 			return th;
 		});
@@ -499,10 +499,10 @@ public final class GardenersWalkBenchmark {
 	private static Alpha newAlpha() {
 		at.ac.tuwien.kr.alpha.api.config.SystemConfig cfg = new at.ac.tuwien.kr.alpha.api.config.SystemConfig();
 		// justification search must stay ENABLED in session mode (2026-07-17: disabling it
-		// degrades live shots ~2500x); -Dwalk.dj=true disables it for batch experiments only.
-		cfg.setDisableJustificationSearch(Boolean.getBoolean("walk.dj"));
-		// diagnostic: -Dwalk.heuristic=DD|GDD_VSIDS|... overrides the branching heuristic (default VSIDS).
-		String heuristic = System.getProperty("walk.heuristic");
+		// degrades live shots ~2500x); -Dgardener.dj=true disables it for batch experiments only.
+		cfg.setDisableJustificationSearch(Boolean.getBoolean("gardener.dj"));
+		// diagnostic: -Dgardener.heuristic=DD|GDD_VSIDS|... overrides the branching heuristic (default VSIDS).
+		String heuristic = System.getProperty("gardener.heuristic");
 		if (heuristic != null) {
 			cfg.setBranchingHeuristicName(heuristic);
 		}
@@ -517,6 +517,6 @@ public final class GardenersWalkBenchmark {
 		return to > from ? s / (to - from) : 0;
 	}
 
-	private GardenersWalkBenchmark() {
+	private GardenerBenchmark() {
 	}
 }

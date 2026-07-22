@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Instance generator for the Gardener's Walk paper table.
+"""Instance generator for the Gardener paper table.
 
 Emits a spec file shared verbatim by the Java (Alpha) and Python (clingo) drivers:
     gard C R
@@ -14,7 +14,7 @@ Manhattan distance >= dmin from the gardener start. With nearDist > 0, frog 1 is
 placed at Manhattan distance ~nearDist (nearest non-empty ring), so exactly one frog
 engages the danger machinery from shot 1 while the rest stay background load.
 
-Usage: gen_walk_instance.py W numFrogs seed wallPct dmin [openR=3] [nearDist=0]
+Usage: gen_gardener_instance.py W numFrogs seed wallPct dmin [openR=3] [nearDist=0]
 """
 import os
 import random
@@ -61,7 +61,7 @@ def main():
             if ring:
                 frogs[0] = rng.choice(ring)
                 break
-    print(f"# walk instance W={w} f={nf} seed={seed} wallpct={wallpct} dmin={dmin} near={near} pocketsFilled={pockets}")
+    print(f"# gardener instance W={w} f={nf} seed={seed} wallpct={wallpct} dmin={dmin} near={near} pocketsFilled={pockets}")
     print(f"gard {gard[0]} {gard[1]}")
     for i, (c, r) in enumerate(frogs, 1):
         print(f"frog {i} {c} {r}")

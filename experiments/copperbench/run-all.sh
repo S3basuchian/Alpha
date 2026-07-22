@@ -23,7 +23,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 RUN_DIR="${RUN_DIR:-$REPO_ROOT}"
-BENCHES=(groundexp cutedge reach coloring coloring-grow walk)
+BENCHES=(groundexp cutedge reach coloring coloring-grow gardener)
 
 command -v copperbench >/dev/null 2>&1 || {
     echo "ERROR: 'copperbench' not found on PATH — install it first (pip install . from a copperbench checkout; see README)." >&2

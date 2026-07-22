@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Gardener's Walk — receding-horizon conformant planning copperbench wrapper.
+# Gardener — receding-horizon conformant planning copperbench wrapper.
 #
-#   bash run-walk.sh <config> <W> <H> <F> <SHOTS> <seed>
+#   bash run-gardener.sh <config> <W> <H> <F> <SHOTS> <seed>
 #     <config> : alpha-mss (live session, grounder wake-up per shot)
 #              | alpha-rebuilt (fresh solver + full re-ground per shot)
 #              | clingo-rebuilt (fresh anchored window per shot, clingo's native 1{..}1 idiom)
@@ -28,8 +28,8 @@ H="${3:?horizon required}"
 F="${4:?frog count required}"
 SHOTS="${5:?shot count required}"
 SEED="${6:?sample seed required}"
-announce walk "$W-$H-$F-$SHOTS-s$SEED"
-SPEC="$EXAMPLES/walk/instances/inst-W${W}-f${F}-d5-s${SEED}.spec"
+announce gardener "$W-$H-$F-$SHOTS-s$SEED"
+SPEC="$EXAMPLES/gardener/instances/inst-W${W}-f${F}-d5-s${SEED}.spec"
 [[ -f "$SPEC" ]] || { echo "missing instance spec $SPEC (run setup.sh)" >&2; exit 1; }
 
 # emit_from_result <logfile> — parse the drivers' RESULT line; only full survivals score.
@@ -49,16 +49,16 @@ case "$CONFIG" in
     # per-shot cap just under the runsolver wall cap so the wall cap is the effective limit.
     # NAIVE (chronological) branching for BOTH Alpha columns: the walk's choice atoms are
     # time-indexed moves, where activity-based heuristics scramble the decision order (measured
-    # 10-100x conflict inflation in the live session near frogs); walk-only — the other
+    # 10-100x conflict inflation in the live session near frogs); gardener-only — the other
     # benchmarks measurably need VSIDS (groundexp inverts under NAIVE).
-    JVM_EXTRA="-Dwalk.shotCapSec=1700 -Dwalk.heuristic=NAIVE" run_java GardenersWalkBenchmark "$mode" "$W" "$H" "$F" "$SHOTS" "$SEED" "$SPEC"
+    JVM_EXTRA="-Dgardener.shotCapSec=1700 -Dgardener.heuristic=NAIVE" run_java GardenerBenchmark "$mode" "$W" "$H" "$F" "$SHOTS" "$SEED" "$SPEC"
     emit_from_result "$JAVA_LOG"
     ;;
 
   clingo-rebuilt|clingo-mss)
     mode="batch"; [[ "$CONFIG" == clingo-mss ]] && mode="mss"
     CLOG="$(mktemp)"; trap 'rm -f "$CLOG"' EXIT
-    "$PYTHON" "$EXAMPLES/walk/walk_clingo.py" "$mode" "$W" "$H" "$F" "$SHOTS" "$SEED" "$SPEC" 2>&1 | tee "$CLOG"
+    "$PYTHON" "$EXAMPLES/gardener/gardener_clingo.py" "$mode" "$W" "$H" "$F" "$SHOTS" "$SEED" "$SPEC" 2>&1 | tee "$CLOG"
     emit_from_result "$CLOG"
     ;;
 

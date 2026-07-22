@@ -5,7 +5,7 @@ paper's four LaTeX tables.
 Usage (from wherever the copperbench <name>/ output folders live — normally the repo root):
     python3 experiments/copperbench/postprocess/collect.py [--results-dir .] [BENCH ...]
 
-with BENCH in {groundexp, cutedge, reach, coloring, coloring-grow, walk} (default: all). For each
+with BENCH in {groundexp, cutedge, reach, coloring, coloring-grow, gardener} (default: all). For each
 benchmark it reads every <name>/<config>/<instance>/run*/ directory, extracts the solver's
 self-reported overall runtime (the `RESULT_SECONDS=` line the wrappers print — the same
 "overall runtime" the paper reports, excluding JVM/gradle startup); a run that produced no
@@ -17,13 +17,14 @@ carries a `-s<seed>` suffix). Aggregation is two-level, matching the paper: with
 the median across any repeated runs, then report the MEAN over the size's samples (the paper
 averages over 10 random instances). A cell with some samples unfinished reports the mean over the
 finished ones and a `note:` line to stderr; a cell with none finished reports `Timeout` or `Memout`.
-When both of a solver's two columns (Alpha MSS+Rebuilt, or clingo Rebuilt+MSS) show the same kind,
-they are merged into a single `\multicolumn{2}{c}{<kind>}` in the LaTeX table.
+When both of a solver's two columns (Alpha Rebuilt+AlphaInc, or clingo Rebuilt+MSS) show the same
+kind, they are merged into a single `\multicolumn{2}{c}{<kind>}` in the LaTeX table.
 
 Outputs (into the results dir):
     results_long.csv   one row per (benchmark, config, instance-with-seed, run): seconds / status
-    results_wide.csv   mean-over-samples per (benchmark, size) across the four solver columns
-    tables.tex         the tables, in the paper's shape, ready to paste
+    results_wide.csv   mean-over-samples AND sample standard deviation per (benchmark, size), four cols
+    tables.tex         two table sets: the MAIN tables (mean only) and the APPENDIX tables, which add a
+                       per-instance standard-deviation subscript ($_{\\pm s}$) to each mean
 """
 import argparse
 import csv
@@ -33,8 +34,11 @@ import statistics
 import sys
 from glob import glob
 
-CONFIG_COLS = ["alpha-mss", "alpha-rebuilt", "clingo-rebuilt", "clingo-mss"]
-COL_HEADER = {"alpha-mss": "Alpha MSS", "alpha-rebuilt": "Alpha Rebuilt",
+# Column order in every table and in results_wide.csv: within the Alpha pair, Rebuilt (batch) comes
+# before AlphaInc (incremental); clingo stays Rebuilt then MSS. The incremental Alpha column, formerly
+# labelled "MSS", is now "AlphaInc"; clingo's multi-shot column keeps the "MSS" label.
+CONFIG_COLS = ["alpha-rebuilt", "alpha-mss", "clingo-rebuilt", "clingo-mss"]
+COL_HEADER = {"alpha-mss": "AlphaInc", "alpha-rebuilt": "Alpha Rebuilt",
               "clingo-rebuilt": "clingo Rebuilt", "clingo-mss": "clingo MSS"}
 
 # Per-benchmark row spec: ordered (instance_key, display_label, extra_col_or_None).
@@ -98,14 +102,14 @@ SPEC = {
                    r"(\texttt{grow}: each shot adds one pendant vertex and edge).",
         "label": "tab:coloring-grow",
     },
-    # Gardener's Walk: receding-horizon conformant planning (skittish coupled frogs at 2%/5% of W,
+    # Gardener: receding-horizon conformant planning (skittish coupled frogs at 2%/5% of W,
     # 10% walls with an open-disk gardener start, frogs uniform at distance >= 5; every shot: plan
     # h steps, execute one, observe frog hops, re-solve; both Alpha columns use the NAIVE
-    # chronological branching heuristic, see run-walk.sh). The W axis shows the static-base scaling
+    # chronological branching heuristic, see run-gardener.sh). The W axis shows the static-base scaling
     # trend: rebuilds re-pay the W^2 world model every shot, the session grounds it once. Instance
-    # key "W-H-F-SHOTS" (see run-walk.sh's announce); early-UNSAT runs emit no RESULT_SECONDS and
+    # key "W-H-F-SHOTS" (see run-gardener.sh's announce); early-UNSAT runs emit no RESULT_SECONDS and
     # count as unfinished samples.
-    "walk": {
+    "gardener": {
         "rows": [("100-6-2-20", "100/2", "6"), ("100-12-2-20", "100/2", "12"),
                  ("100-6-5-20", "100/5", "6"), ("100-12-5-20", "100/5", "12"),
                  ("200-6-4-20", "200/4", "6"), ("200-12-4-20", "200/4", "12"),
@@ -113,10 +117,10 @@ SPEC = {
                  ("500-6-10-20", "500/10", "6"), ("500-12-10-20", "500/10", "12"),
                  ("500-6-25-20", "500/25", "6"), ("500-12-25-20", "500/25", "12")],
         "row_head": r"$W$/frogs", "extra_head": "$h$",
-        "caption": r"Gardener's Walk: receding-horizon conformant planning ($W{\times}W$ garden, "
+        "caption": r"Gardener: receding-horizon conformant planning ($W{\times}W$ garden, "
                    r"10\% walls, 20 shots; skittish frogs at ${\sim}2\%$ and ${\sim}5\%$ of $W$ "
                    r"placed uniformly at distance ${\geq}5$; lookahead horizon $h$).",
-        "label": "tab:walk",
+        "label": "tab:gardener",
     },
 }
 
@@ -219,12 +223,14 @@ def reduce_by_size(agg):
     return by_size
 
 
-def cell(by_size, config, size):
+def cell(by_size, config, size, show_sd=False):
     """One table cell: mean seconds over the size's finished random samples, with a trailing
     ``(N)`` when N of the samples failed (e.g. ``1.23 (3)`` = mean of the 7 finished, 3 timed/mem-out
-    — the bracket count does not distinguish the two). If *every* sample failed, the failure kind
-    (``Timeout`` or ``Memout``, whichever most samples hit) is shown instead. ``None`` means the
-    config was not run for this benchmark."""
+    — the bracket count does not distinguish the two). With ``show_sd`` (the appendix variant) the
+    mean carries a ``$_{\\pm s}$`` subscript giving the sample standard deviation over the finished
+    samples; the subscript is dropped when fewer than two samples finished (std undefined). If *every*
+    sample failed, the failure kind (``Timeout`` or ``Memout``, whichever most samples hit) is shown
+    instead. ``None`` means the config was not run for this benchmark."""
     b = by_size.get((config, size))
     if b is None:
         return None  # config not run for this benchmark (e.g. coloring clingo-mss)
@@ -237,18 +243,32 @@ def cell(by_size, config, size):
         n_mem = b["status"].count("Memout")
         return "Timeout" if n_time >= n_mem else "Memout"
     mean = statistics.mean(b["vals"])
+    val = f"{mean:.2f}"
+    if show_sd and finished >= 2:
+        # Sample standard deviation over the finished random instances (the distributional / variation
+        # measure surfaced only in the appendix tables). Skipped for n<2 (std undefined).
+        val = rf"{mean:.2f}$_{{\pm{statistics.stdev(b['vals']):.2f}}}$"
     failed = n - finished
-    if failed == 0:
-        return f"{mean:.2f}"
-    return f"{mean:.2f} ({failed})"  # mean over finished samples; N samples timed/mem-out
+    if failed:
+        val += f" ({failed})"  # mean over finished samples; N samples timed/mem-out
+    return val
 
 
-def render_numeric_cells(by_size, key):
+def sd_str(by_size, config, size):
+    """Sample standard deviation (seconds, 2 dp) over a size's finished random samples for the extra
+    per-column columns in results_wide.csv; "" when fewer than two finished or the config was not run."""
+    b = by_size.get((config, size))
+    if b is None or len(b["vals"]) < 2:
+        return ""
+    return f"{statistics.stdev(b['vals']):.2f}"
+
+
+def render_numeric_cells(by_size, key, show_sd=False):
     """The four solver columns for one row as a LaTeX fragment. When BOTH of a solver's columns
-    (Alpha = MSS+Rebuilt, clingo = Rebuilt+MSS) show the *same* all-failed kind (both Timeout or both
-    Memout), they collapse into a single centered ``\\multicolumn{2}{c}{<kind>}``; a column not run
-    for the benchmark renders as ``{--}``."""
-    raw = [cell(by_size, cfg, key) for cfg in CONFIG_COLS]
+    (Alpha = Rebuilt+AlphaInc, clingo = Rebuilt+MSS) show the *same* all-failed kind (both Timeout or
+    both Memout), they collapse into a single centered ``\\multicolumn{2}{c}{<kind>}``; a column not
+    run for the benchmark renders as ``{--}``. ``show_sd`` adds the std subscript to finished cells."""
+    raw = [cell(by_size, cfg, key, show_sd) for cfg in CONFIG_COLS]
     parts = []
     for lo in (0, 2):  # the two solver column-pairs, in CONFIG_COLS order
         a, b = raw[lo], raw[lo + 1]
@@ -260,18 +280,26 @@ def render_numeric_cells(by_size, key):
     return " & ".join(parts)
 
 
-def latex_table(bench, by_size):
+def latex_table(bench, by_size, show_sd=False):
     s = SPEC[bench]
     has_extra = s["extra_head"] is not None
     # Column format: row-head [+ extra] + 4 numeric columns.
     colfmt = "r" + ("l" if has_extra else "") + "rrrr"
     span_start = 3 if has_extra else 2
+    # The appendix variant adds the std subscript, a distinct label (so both can be \ref'd), and a
+    # caption sentence defining the subscript.
+    caption = s["caption"]
+    label = s["label"]
+    if show_sd:
+        caption += (r" Subscripts give the sample standard deviation over the "
+                    r"$10$ randomly-seeded instances (seconds).")
+        label += "-sd"
     out = []
     out.append(r"\begin{table}[t]")
     out.append(r"  \centering")
     out.append(r"  \small")
-    out.append(rf"  \caption{{{s['caption']}}}")
-    out.append(rf"  \label{{{s['label']}}}")
+    out.append(rf"  \caption{{{caption}}}")
+    out.append(rf"  \label{{{label}}}")
     out.append(rf"  \begin{{tabular}}{{{colfmt}}}")
     out.append(r"    \toprule")
     lead = "    " + ("& " if not has_extra else "& & ")
@@ -281,7 +309,8 @@ def latex_table(bench, by_size):
     head = f"    {s['row_head']} & "
     if has_extra:
         head += f"{s['extra_head']} & "
-    head += "MSS & Rebuilt & Rebuilt & MSS \\\\"
+    # Alpha pair swapped to Rebuilt, AlphaInc; clingo pair stays Rebuilt, MSS (matches CONFIG_COLS).
+    head += "Rebuilt & AlphaInc & Rebuilt & MSS \\\\"
     out.append(head)
     out.append(r"    \midrule")
     # Collapse consecutive rows sharing a row-head label (the shots variants of one size) into a
@@ -298,7 +327,7 @@ def latex_table(bench, by_size):
             out.append(r"    \hline")
         n = len(members)
         for mi, (key, extra) in enumerate(members):
-            numeric = render_numeric_cells(by_size, key)
+            numeric = render_numeric_cells(by_size, key, show_sd)
             if has_extra:
                 head_cell = "" if mi else (rf"\multirow{{{n}}}{{*}}{{{disp}}}" if n > 1 else disp)
                 row = f"    {head_cell} & {extra} & " + numeric + r" \\"
@@ -321,7 +350,7 @@ def main():
     args = ap.parse_args()
     benches = args.benches or list(SPEC)
 
-    long_rows, wide_rows, tex = [], [], []
+    long_rows, wide_rows, tex_main, tex_app = [], [], [], []
     for bench in benches:
         if bench not in SPEC:
             print(f"skip unknown benchmark {bench}", file=sys.stderr)
@@ -335,8 +364,13 @@ def main():
                 sv = d["secs"][i] if i < len(d["secs"]) else ""
                 long_rows.append([bench, config, instance, i + 1, sv, d["status"][i], rd])
         for key, disp, _ in SPEC[bench]["rows"]:
-            wide_rows.append([bench, disp] + [cell(by_size, c, key) or "" for c in CONFIG_COLS])
-        tex.append(latex_table(bench, by_size))
+            row = [bench, disp]
+            for c in CONFIG_COLS:
+                row.append(cell(by_size, c, key) or "")   # mean (or Timeout/Memout/blank)
+                row.append(sd_str(by_size, c, key))        # sample std ("" if <2 samples finished)
+            wide_rows.append(row)
+        tex_main.append(latex_table(bench, by_size, show_sd=False))   # main paper tables (mean only)
+        tex_app.append(latex_table(bench, by_size, show_sd=True))     # appendix tables (mean + std)
         # Surface partially-finished cells (some samples mem-out): the reported mean is over the
         # finished samples only — never silently hide the dropped ones.
         for (config, size), b in sorted(by_size.items()):
@@ -351,15 +385,23 @@ def main():
         w.writerows(long_rows)
     with open(os.path.join(outdir, "results_wide.csv"), "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["benchmark", "instance"] + [COL_HEADER[c] for c in CONFIG_COLS])
+        header = ["benchmark", "instance"]
+        for c in CONFIG_COLS:
+            header += [COL_HEADER[c], COL_HEADER[c] + " sd"]
+        w.writerow(header)
         w.writerows(wide_rows)
     with open(os.path.join(outdir, "tables.tex"), "w") as fh:
         fh.write(r"% Requires \usepackage{booktabs} and \usepackage{multirow} in the preamble." + "\n")
-        fh.write("\n\n".join(tex) + "\n")
+        fh.write("\n% ===== Main tables: mean runtime over the 10 random instances. =====\n\n")
+        fh.write("\n\n".join(tex_main) + "\n")
+        fh.write("\n% ===== Appendix tables: same numbers, each mean carrying a per-instance "
+                 "standard-deviation subscript. =====\n\n")
+        fh.write("\n\n".join(tex_app) + "\n")
 
     print(f"wrote {os.path.join(outdir, 'results_long.csv')}  ({len(long_rows)} runs)")
     print(f"wrote {os.path.join(outdir, 'results_wide.csv')}  ({len(wide_rows)} rows)")
-    print(f"wrote {os.path.join(outdir, 'tables.tex')}  ({len(tex)} tables)")
+    print(f"wrote {os.path.join(outdir, 'tables.tex')}  "
+          f"({len(tex_main)} main + {len(tex_app)} appendix tables)")
 
 
 if __name__ == "__main__":

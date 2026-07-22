@@ -94,7 +94,7 @@ where one long-lived incremental session is expected to beat re-grounding every 
 | **cutedge** | `cutedge` | `IncrementalCutedgeRetractionBenchmark` | iterative edge **retraction** over transitive closure (L&W 2018 Table 2) |
 | **groundexp** | `groundexp` | `IncrementalGroundExpModelForbidBenchmark` | fixed universe with a ground-explosion rule (L&W Example 1), forbidding models shot-by-shot |
 | **coloring** | `coloring`, `coloring-grow` | `IncrementalColoringBenchmark` | 5-colouring under a rotating mixed edit stream (`coloring`) or monotone growth (`coloring-grow`) |
-| **walk** | `walk` | `GardenersWalkBenchmark` | receding-horizon conformant planning (plan *h* / act 1 / observe / re-solve) |
+| **gardener** | `gardener` | `GardenerBenchmark` | receding-horizon conformant planning (plan *h* / act 1 / observe / re-solve) |
 
 Every benchmark is run in four **configurations**:
 
@@ -207,16 +207,16 @@ bash examples/coloring/bench-coloring-sweep.sh        # coloring (Table 4)
 bash examples/coloring/bench-coloring-grow-sweep.sh   # coloring-grow (Table 5)
 ```
 
-#### walk
+#### gardener
 ```bash
 # 1. generate a garden spec — args: W numFrogs seed wallPct dmin [openR=3] [nearDist=0]
-python3 examples/walk/gen_walk_instance.py 100 2 42 10 5 3 > /tmp/walk.spec
+python3 examples/gardener/gen_gardener_instance.py 100 2 42 10 5 3 > /tmp/gardener.spec
 
 # 2. run Alpha — args: <mode> <W> <H> <F> <SHOTS> <seed> <spec>, mode ∈ {live,batch}
-java -cp "$CP" $PKG.GardenersWalkBenchmark live 100 6 2 20 42 /tmp/walk.spec
+java -cp "$CP" $PKG.GardenerBenchmark live 100 6 2 20 42 /tmp/gardener.spec
 
 # 3. clingo baseline — first arg ∈ {batch, mss}
-python3 examples/walk/walk_clingo.py batch 100 6 2 20 42 /tmp/walk.spec
+python3 examples/gardener/gardener_clingo.py batch 100 6 2 20 42 /tmp/gardener.spec
 ```
 
 ### Running the whole suite with copperbench (automated, SLURM)
@@ -236,13 +236,13 @@ inputs — `<bench>.sizes` (the size grid), `<bench>.configs` (the four configs)
 PARTITION=<your-partition> BASE_SEED=42 NUM_SAMPLES=10 bash experiments/copperbench/setup.sh
 
 # 2. Submit each benchmark to the cluster.
-for b in groundexp cutedge reach coloring coloring-grow walk; do
+for b in groundexp cutedge reach coloring coloring-grow gardener; do
     copperbench experiments/copperbench/$b.json
     ( cd "$b" && bash submit_all.sh )
 done
 
 # 3. After all jobs finish, aggregate the results.
-python3 experiments/copperbench/postprocess/collect.py groundexp cutedge reach coloring coloring-grow walk
+python3 experiments/copperbench/postprocess/collect.py groundexp cutedge reach coloring coloring-grow gardener
 ```
 
 `collect.py` walks the per-run `stdout.log` files, reads the canonical `RESULT_SECONDS=<float>` each wrapper

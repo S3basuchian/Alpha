@@ -1,8 +1,8 @@
 {
-    "name": "walk",
-    "executable": "bash __REPO_ROOT__/experiments/copperbench/wrappers/run-walk.sh",
-    "configs": "__REPO_ROOT__/experiments/copperbench/walk.configs",
-    "instances": "__REPO_ROOT__/experiments/copperbench/walk.instances",
+    "name": "gardener",
+    "executable": "bash __REPO_ROOT__/experiments/copperbench/wrappers/run-gardener.sh",
+    "configs": "__REPO_ROOT__/experiments/copperbench/gardener.configs",
+    "instances": "__REPO_ROOT__/experiments/copperbench/gardener.instances",
     "instances_are_parameters": true,
     "working_dir": "__REPO_ROOT__",
     "timeout": 1800,

@@ -113,31 +113,31 @@ while read -r V E SHOTS; do
 done < <(read_sizes coloring-grow)
 
 
-# walk: Gardener's Walk receding-horizon planning. One seeded instance spec per (W,F,seed)
+# gardener: Gardener receding-horizon planning. One seeded instance spec per (W,F,seed)
 # (10% walls, connected free space via pocket-filling, frogs uniform at Manhattan distance >= 5)
 # shared across the h/shots rows and by all four configs. The Java driver / clingo drivers replay
 # their own seeded frog movement (own-sequence). The placement floor is part of the filename (-d5)
 # so a placement change can never silently reuse stale specs. Size grid line: "<W> <H> <F> <SHOTS>".
-mkdir -p "$EXAMPLES/walk/instances"
-: > "$HERE/walk.instances"
+mkdir -p "$EXAMPLES/gardener/instances"
+: > "$HERE/gardener.instances"
 while read -r W H F SHOTS; do
     for s in "${SEEDS[@]}"; do
-        f="$EXAMPLES/walk/instances/inst-W$W-f$F-d5-s$s.spec"
+        f="$EXAMPLES/gardener/instances/inst-W$W-f$F-d5-s$s.spec"
         # -s (not -f): a failed generation must not leave an empty file behind that later
         # passes the wrapper's existence check (every config then dies on it -> excluded cell).
-        [[ -s "$f" ]] || "$PY" "$EXAMPLES/walk/gen_walk_instance.py" "$W" "$F" "$s" 10 5 3 > "$f" \
+        [[ -s "$f" ]] || "$PY" "$EXAMPLES/gardener/gen_gardener_instance.py" "$W" "$F" "$s" 10 5 3 > "$f" \
             || { rm -f "$f"; echo "FATAL: instance generation failed for $f" >&2; exit 1; }
-        echo "$W $H $F $SHOTS $s" >> "$HERE/walk.instances"
+        echo "$W $H $F $SHOTS $s" >> "$HERE/gardener.instances"
     done
-done < <(read_sizes walk)
+done < <(read_sizes gardener)
 
-for b in groundexp cutedge reach coloring coloring-grow walk; do
+for b in groundexp cutedge reach coloring coloring-grow gardener; do
     echo "    $b.instances: $(wc -l < "$HERE/$b.instances") lines"
 done
 
 # 3. Render the copperbench JSON configs from templates.
 echo "==> rendering copperbench configs (partition=$PARTITION) ..."
-for b in groundexp cutedge reach coloring coloring-grow walk; do
+for b in groundexp cutedge reach coloring coloring-grow gardener; do
     sed -e "s#__REPO_ROOT__#$REPO_ROOT#g" \
         -e "s#__PARTITION__#$PARTITION#g" \
         "$HERE/$b.json.in" > "$HERE/$b.json"
