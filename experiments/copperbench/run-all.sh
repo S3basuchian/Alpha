@@ -47,6 +47,14 @@ echo "==> [3/4] generating SLURM job trees (copperbench) ..."
 for b in "${BENCHES[@]}"; do
     echo "    copperbench $b.json"
     copperbench "$HERE/$b.json"
+    # Work around a copperbench template bug (present through >=0.10.1 and current main): a stray
+    # ':' after "{%- if exclusive %}" in batch_job.slurm.jinja2 gets whitespace-glued onto the
+    # "#SBATCH --array=1-N" line whenever exclusive=true, producing "--array=1-N:" -> sbatch
+    # rejects it as an "Invalid job array specification". Strip a trailing colon off the array line
+    # so the harness is self-healing regardless of the installed copperbench version. No-op once
+    # upstream fixes it (a valid "%throttle" spec never ends in ':').
+    bj="$RUN_DIR/$b/batch_job.slurm"
+    [[ -f "$bj" ]] && sed -i '/^#SBATCH --array=/ s/:$//' "$bj"
 done
 
 echo "==> [4/4] submitting all jobs ..."
